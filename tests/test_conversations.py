@@ -184,17 +184,16 @@ def _override_with_rls(
 
     async def _override():
         async with factory() as s:
-            # is_local=false so the GUC survives the implicit transaction the
-            # ORM opens for the next query.
-            await s.execute(
-                text("SELECT set_config('app.current_org', :v, false)"),
-                {"v": str(org_id)},
-            )
-            await s.execute(
-                text("SELECT set_config('app.allowed_projects', :v, false)"),
-                {"v": ",".join(str(p) for p in projects)},
-            )
-            yield s
+            async with s.begin():
+                await s.execute(
+                    text("SELECT set_config('app.current_org', :v, true)"),
+                    {"v": str(org_id)},
+                )
+                await s.execute(
+                    text("SELECT set_config('app.allowed_projects', :v, true)"),
+                    {"v": ",".join(str(p) for p in projects)},
+                )
+                yield s
 
     return _override
 
