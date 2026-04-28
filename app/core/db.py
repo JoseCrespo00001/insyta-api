@@ -56,8 +56,15 @@ async def get_db_with_tenant_context(
 ) -> AsyncIterator[AsyncSession]:
     """Open a session with `app.current_org` + `app.allowed_projects` set for RLS.
 
-    Uses `set_config(name, value, true)` (the `true` makes it transaction-local)
-    with parameter binds. RLS policies read these GUCs to filter rows.
+    Uses `set_config(name, value, true)` — the `true` makes the binding
+    transaction-local. We yield *inside* `session.begin()` so the GUCs survive
+    until the request handler is done, and they vanish the moment the
+    transaction closes. With pgbouncer in transaction-pooling mode the
+    physical connection is released between transactions, so leaking
+    session-level GUCs to the next tenant is impossible.
+
+    Bound parameters guard against SQL injection even if `current_user`
+    state is ever tainted upstream.
     """
     org_id_str = str(current_user.org_id)
     allowed = ",".join(str(p) for p in current_user.allowed_project_ids)
@@ -72,7 +79,7 @@ async def get_db_with_tenant_context(
                 text("SELECT set_config('app.allowed_projects', :v, true)"),
                 {"v": allowed},
             )
-        yield session
+            yield session
 
 
 async def set_tenant_context(
