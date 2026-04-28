@@ -63,6 +63,21 @@ uv run ruff check .
 uv run ruff format .
 ```
 
+## Pre-commit hooks
+
+```bash
+# 1. Instalar pre-commit (una sola vez)
+uv tool install pre-commit  # o: pipx install pre-commit
+
+# 2. Activar hooks en este repo
+pre-commit install
+
+# 3. Correr todos los hooks contra el repo entero (opcional)
+pre-commit run --all-files
+```
+
+Los hooks corren ruff (check + format) y mypy en cada commit.
+
 ## Convencion de commits
 
 Para que el git hook sincronice con Linear, usa:
