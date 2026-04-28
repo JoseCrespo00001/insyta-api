@@ -17,6 +17,7 @@ from app.models.tenancy import (
     Project,
     User,
 )
+from app.models.uploads import Upload
 
 __all__ = [
     "Agent",
@@ -27,5 +28,6 @@ __all__ = [
     "Message",
     "Organization",
     "Project",
+    "Upload",
     "User",
 ]
