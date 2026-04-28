@@ -28,6 +28,7 @@ dependencies = [
     "spacy>=3.8.0",
     "structlog>=24.4.0",
     "sse-starlette>=2.1.0",
+    "slowapi>=0.1.9",
 ]
 
 [dependency-groups]
@@ -52,6 +53,9 @@ ignore = ["E501"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
 
 [build-system]
 requires = ["hatchling"]

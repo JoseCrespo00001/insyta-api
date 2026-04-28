@@ -1,7 +1,10 @@
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import Field, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+WEAK_JWT_SECRETS: frozenset[str] = frozenset({"change-me", "secret", "test", ""})
+JWT_SECRET_MIN_LENGTH = 32
 
 
 class Settings(BaseSettings):
@@ -41,6 +44,23 @@ class Settings(BaseSettings):
 
     resend_api_key: str | None = None
     email_from: str = Field(default="alerts@insyta.io")
+
+    @field_validator("jwt_secret")
+    @classmethod
+    def validate_jwt_secret(cls, v: str, info: ValidationInfo) -> str:
+        environment = info.data.get("environment", "development")
+        if environment == "development":
+            return v
+        if v in WEAK_JWT_SECRETS:
+            raise ValueError(
+                f"jwt_secret cannot be a known weak value in environment={environment!r}"
+            )
+        if len(v) < JWT_SECRET_MIN_LENGTH:
+            raise ValueError(
+                f"jwt_secret must be at least {JWT_SECRET_MIN_LENGTH} characters "
+                f"in environment={environment!r} (got {len(v)})"
+            )
+        return v
 
     @property
     def cors_origin_list(self) -> list[str]:

@@ -4,8 +4,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.core.config import get_settings
-from app.routers import health, webhooks
+from app.core.config import WEAK_JWT_SECRETS, get_settings
+from app.routers import health, me, webhooks
 
 logger = logging.getLogger(__name__)
 
@@ -13,6 +13,13 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
+    if (
+        settings.environment != "development"
+        and settings.jwt_secret in WEAK_JWT_SECRETS
+    ):
+        raise RuntimeError(
+            f"JWT secret not configured (got weak default in environment={settings.environment!r})"
+        )
     logger.info("[STARTUP] Insyta API starting in %s mode", settings.environment)
     yield
     logger.info("[SHUTDOWN] Insyta API shutting down")
@@ -42,6 +49,7 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(health.router)
+    app.include_router(me.router)
     app.include_router(webhooks.router)
 
     return app
