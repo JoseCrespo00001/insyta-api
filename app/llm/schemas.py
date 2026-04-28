@@ -28,6 +28,8 @@ class EvaluationResponse(BaseModel):
 class LLMUsage(BaseModel):
     """Token + cost accounting for one LLM call."""
 
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     input_tokens: int = 0
     output_tokens: int = 0
     cache_read_input_tokens: int = 0
@@ -35,3 +37,4 @@ class LLMUsage(BaseModel):
     cost_usd: Decimal = Decimal("0")
     model: str = ""
     latency_ms: int = 0
+    phoenix_span_id: str | None = None

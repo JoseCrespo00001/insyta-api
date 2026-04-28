@@ -77,6 +77,7 @@ async def _persist_evaluation(
             model_used=usage.model,
             tokens_used=usage.input_tokens + usage.output_tokens,
             cost_usd=usage.cost_usd,
+            phoenix_span_id=usage.phoenix_span_id,
         )
         .on_conflict_do_nothing(index_elements=["conversation_id"])
         .returning(Evaluation.id)

@@ -27,6 +27,7 @@ from app.llm.prompts.eval_v1 import (
     build_user_prompt,
 )
 from app.llm.schemas import EvaluationResponse, LLMUsage
+from app.observability.tracing import current_span_id, llm_span, record_llm_usage
 
 logger = logging.getLogger(__name__)
 
@@ -93,35 +94,40 @@ class AnthropicProvider:
         from anthropic import APIError, APIStatusError, RateLimitError
 
         user_prompt = build_user_prompt(messages)
-        started = time.monotonic()
-        try:
-            resp = await client.messages.create(
-                model=self.model,
-                max_tokens=1024,
-                system=[
-                    {
-                        "type": "text",
-                        "text": SYSTEM_PROMPT_V1,
-                        "cache_control": {"type": "ephemeral"},
-                    }
-                ],
-                messages=[{"role": "user", "content": user_prompt}],
-            )
-        except RateLimitError as exc:
-            raise TransientLLMError(f"anthropic rate limit: {exc}") from exc
-        except APIStatusError as exc:
-            if exc.status_code and 500 <= exc.status_code < 600:
-                raise TransientLLMError(f"anthropic 5xx: {exc}") from exc
-            raise FatalLLMError(f"anthropic {exc.status_code}: {exc}") from exc
-        except APIError as exc:
-            raise TransientLLMError(f"anthropic api error: {exc}") from exc
+        with llm_span(self.name, self.model) as span:
+            started = time.monotonic()
+            try:
+                resp = await client.messages.create(
+                    model=self.model,
+                    max_tokens=1024,
+                    system=[
+                        {
+                            "type": "text",
+                            "text": SYSTEM_PROMPT_V1,
+                            "cache_control": {"type": "ephemeral"},
+                        }
+                    ],
+                    messages=[{"role": "user", "content": user_prompt}],
+                )
+            except RateLimitError as exc:
+                raise TransientLLMError(f"anthropic rate limit: {exc}") from exc
+            except APIStatusError as exc:
+                if exc.status_code and 500 <= exc.status_code < 600:
+                    raise TransientLLMError(f"anthropic 5xx: {exc}") from exc
+                raise FatalLLMError(f"anthropic {exc.status_code}: {exc}") from exc
+            except APIError as exc:
+                raise TransientLLMError(f"anthropic api error: {exc}") from exc
 
-        latency_ms = int((time.monotonic() - started) * 1000)
-        text = "".join(
-            block.text for block in resp.content if getattr(block, "type", "") == "text"
-        )
-        usage = self._build_usage(resp, latency_ms)
-        return _parse_evaluation(text), usage
+            latency_ms = int((time.monotonic() - started) * 1000)
+            text = "".join(
+                block.text
+                for block in resp.content
+                if getattr(block, "type", "") == "text"
+            )
+            usage = self._build_usage(resp, latency_ms)
+            usage.phoenix_span_id = current_span_id()
+            record_llm_usage(span, usage)
+            return _parse_evaluation(text), usage
 
     def _build_usage(self, resp: Any, latency_ms: int) -> LLMUsage:
         u = resp.usage
@@ -174,30 +180,33 @@ class OpenAIProvider:
         from openai import APIError, APIStatusError, RateLimitError
 
         user_prompt = build_user_prompt(messages)
-        started = time.monotonic()
-        try:
-            resp = await client.chat.completions.create(
-                model=self.model,
-                temperature=0,
-                response_format={"type": "json_object"},
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT_V1},
-                    {"role": "user", "content": user_prompt},
-                ],
-            )
-        except RateLimitError as exc:
-            raise TransientLLMError(f"openai rate limit: {exc}") from exc
-        except APIStatusError as exc:
-            if exc.status_code and 500 <= exc.status_code < 600:
-                raise TransientLLMError(f"openai 5xx: {exc}") from exc
-            raise FatalLLMError(f"openai {exc.status_code}: {exc}") from exc
-        except APIError as exc:
-            raise TransientLLMError(f"openai api error: {exc}") from exc
+        with llm_span(self.name, self.model) as span:
+            started = time.monotonic()
+            try:
+                resp = await client.chat.completions.create(
+                    model=self.model,
+                    temperature=0,
+                    response_format={"type": "json_object"},
+                    messages=[
+                        {"role": "system", "content": SYSTEM_PROMPT_V1},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                )
+            except RateLimitError as exc:
+                raise TransientLLMError(f"openai rate limit: {exc}") from exc
+            except APIStatusError as exc:
+                if exc.status_code and 500 <= exc.status_code < 600:
+                    raise TransientLLMError(f"openai 5xx: {exc}") from exc
+                raise FatalLLMError(f"openai {exc.status_code}: {exc}") from exc
+            except APIError as exc:
+                raise TransientLLMError(f"openai api error: {exc}") from exc
 
-        latency_ms = int((time.monotonic() - started) * 1000)
-        text = resp.choices[0].message.content or ""
-        usage = self._build_usage(resp, latency_ms)
-        return _parse_evaluation(text), usage
+            latency_ms = int((time.monotonic() - started) * 1000)
+            text = resp.choices[0].message.content or ""
+            usage = self._build_usage(resp, latency_ms)
+            usage.phoenix_span_id = current_span_id()
+            record_llm_usage(span, usage)
+            return _parse_evaluation(text), usage
 
     def _build_usage(self, resp: Any, latency_ms: int) -> LLMUsage:
         u = resp.usage
