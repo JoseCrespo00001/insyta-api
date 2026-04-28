@@ -3,6 +3,9 @@
 `postgres_engine` connects to the docker-compose Postgres on port 5433. The
 session fixture truncates touched tables between tests to keep RLS assertions
 isolated. If the database is not available we skip RLS tests rather than fail.
+
+The slowapi limiter is replaced with an in-memory storage at import time so the
+default Redis-backed limiter never tries to connect during tests.
 """
 
 from __future__ import annotations
@@ -13,12 +16,23 @@ from collections.abc import AsyncIterator
 
 import pytest
 import pytest_asyncio
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
     async_sessionmaker,
     create_async_engine,
+)
+
+from app.services import rate_limit as _rate_limit_module
+
+_rate_limit_module.limiter = Limiter(
+    key_func=get_remote_address,
+    storage_uri="memory://",
+    strategy="fixed-window",
+    default_limits=[],
 )
 
 TEST_DATABASE_URL = os.getenv(

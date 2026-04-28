@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db
 from app.models import Project
+from app.services.rate_limit import WEBHOOK_RATE_LIMIT, limiter
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,7 @@ def _verify_signature(secret: str, body: bytes, header_value: str) -> bool:
     response_model=WebhookAck,
     status_code=status.HTTP_200_OK,
 )
+@limiter.limit(WEBHOOK_RATE_LIMIT)
 async def wati_webhook(
     project_public_id: str,
     request: Request,
@@ -82,6 +84,7 @@ async def wati_webhook(
     response_model=WebhookAck,
     status_code=status.HTTP_200_OK,
 )
+@limiter.limit(WEBHOOK_RATE_LIMIT)
 async def respondio_webhook(
     project_public_id: str,
     request: Request,
