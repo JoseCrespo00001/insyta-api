@@ -8,7 +8,7 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
 from app.core.config import WEAK_JWT_SECRETS, get_settings
-from app.routers import health, me, track, webhooks
+from app.routers import conversations, health, me, track, webhooks
 from app.services.rate_limit import limiter
 
 logger = logging.getLogger(__name__)
@@ -58,6 +58,7 @@ def create_app() -> FastAPI:
 
     app.include_router(health.router)
     app.include_router(me.router)
+    app.include_router(conversations.router)
     app.include_router(track.router)
     app.include_router(webhooks.router)
 
