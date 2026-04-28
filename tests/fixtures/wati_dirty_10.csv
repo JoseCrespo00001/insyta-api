@@ -1,0 +1,31 @@
+﻿conversation_id,role,content,timestamp
+conv-d000,user,Pregunta 🚀 0,2026-04-01T10:00:00-03:00
+conv-d000,assistant,Respuesta 🎉,2026-04-01T13:01:00+00:00
+conv-d000,user,"Otra cosa, mi pedido es 4521",2026-04-01 13:02:00
+conv-d001,user,Pregunta 🎉 1,2026-04-01T10:00:00-03:00
+conv-d001,assistant,Respuesta ❤️,2026-04-01T13:01:00+00:00
+conv-d001,user,"Otra cosa, mi pedido es 4521",2026-04-01 13:02:00
+conv-d002,user,Pregunta ❤️ 2,2026-04-01T10:00:00-03:00
+conv-d002,assistant,Respuesta 🤖,2026-04-01T13:01:00+00:00
+conv-d002,user,"Otra cosa, mi pedido es 4521",2026-04-01 13:02:00
+conv-d003,user,Pregunta 🤖 3,2026-04-01T10:00:00-03:00
+conv-d003,assistant,Respuesta 😅,2026-04-01T13:01:00+00:00
+conv-d003,user,"Otra cosa, mi pedido es 4521",2026-04-01 13:02:00
+conv-d004,user,Pregunta 😅 4,2026-04-01T10:00:00-03:00
+conv-d004,assistant,Respuesta 🚀,2026-04-01T13:01:00+00:00
+conv-d004,user,"Otra cosa, mi pedido es 4521",2026-04-01 13:02:00
+conv-d005,user,Pregunta 🚀 5,2026-04-01T10:00:00-03:00
+conv-d005,assistant,Respuesta 🎉,2026-04-01T13:01:00+00:00
+conv-d005,user,"Otra cosa, mi pedido es 4521",2026-04-01 13:02:00
+conv-d006,user,Pregunta 🎉 6,2026-04-01T10:00:00-03:00
+conv-d006,assistant,Respuesta ❤️,2026-04-01T13:01:00+00:00
+conv-d006,user,"Otra cosa, mi pedido es 4521",2026-04-01 13:02:00
+conv-d007,user,Pregunta ❤️ 7,2026-04-01T10:00:00-03:00
+conv-d007,assistant,Respuesta 🤖,2026-04-01T13:01:00+00:00
+conv-d007,user,"Otra cosa, mi pedido es 4521",2026-04-01 13:02:00
+conv-d008,user,Pregunta 🤖 8,2026-04-01T10:00:00-03:00
+conv-d008,assistant,Respuesta 😅,2026-04-01T13:01:00+00:00
+conv-d008,user,"Otra cosa, mi pedido es 4521",2026-04-01 13:02:00
+conv-d009,user,Pregunta 😅 9,2026-04-01T10:00:00-03:00
+conv-d009,assistant,Respuesta 🚀,2026-04-01T13:01:00+00:00
+conv-d009,user,"Otra cosa, mi pedido es 4521",2026-04-01 13:02:00

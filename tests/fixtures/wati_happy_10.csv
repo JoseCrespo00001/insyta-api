@@ -1,0 +1,31 @@
+conversation_id,role,content,timestamp
+conv-h000,user,"Hola, consulta 0",2026-04-01T10:00:00Z
+conv-h000,assistant,Hola! Te ayudo con eso 😀,2026-04-01T10:00:30Z
+conv-h000,user,Gracias,2026-04-01T10:00:50Z
+conv-h001,user,"Hola, consulta 1",2026-04-01T10:01:00Z
+conv-h001,assistant,Hola! Te ayudo con eso 😀,2026-04-01T10:01:30Z
+conv-h001,user,Gracias,2026-04-01T10:01:50Z
+conv-h002,user,"Hola, consulta 2",2026-04-01T10:02:00Z
+conv-h002,assistant,Hola! Te ayudo con eso 😀,2026-04-01T10:02:30Z
+conv-h002,user,Gracias,2026-04-01T10:02:50Z
+conv-h003,user,"Hola, consulta 3",2026-04-01T10:03:00Z
+conv-h003,assistant,Hola! Te ayudo con eso 😀,2026-04-01T10:03:30Z
+conv-h003,user,Gracias,2026-04-01T10:03:50Z
+conv-h004,user,"Hola, consulta 4",2026-04-01T10:04:00Z
+conv-h004,assistant,Hola! Te ayudo con eso 😀,2026-04-01T10:04:30Z
+conv-h004,user,Gracias,2026-04-01T10:04:50Z
+conv-h005,user,"Hola, consulta 5",2026-04-01T10:05:00Z
+conv-h005,assistant,Hola! Te ayudo con eso 😀,2026-04-01T10:05:30Z
+conv-h005,user,Gracias,2026-04-01T10:05:50Z
+conv-h006,user,"Hola, consulta 6",2026-04-01T10:06:00Z
+conv-h006,assistant,Hola! Te ayudo con eso 😀,2026-04-01T10:06:30Z
+conv-h006,user,Gracias,2026-04-01T10:06:50Z
+conv-h007,user,"Hola, consulta 7",2026-04-01T10:07:00Z
+conv-h007,assistant,Hola! Te ayudo con eso 😀,2026-04-01T10:07:30Z
+conv-h007,user,Gracias,2026-04-01T10:07:50Z
+conv-h008,user,"Hola, consulta 8",2026-04-01T10:08:00Z
+conv-h008,assistant,Hola! Te ayudo con eso 😀,2026-04-01T10:08:30Z
+conv-h008,user,Gracias,2026-04-01T10:08:50Z
+conv-h009,user,"Hola, consulta 9",2026-04-01T10:09:00Z
+conv-h009,assistant,Hola! Te ayudo con eso 😀,2026-04-01T10:09:30Z
+conv-h009,user,Gracias,2026-04-01T10:09:50Z
