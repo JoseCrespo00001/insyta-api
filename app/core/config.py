@@ -1,10 +1,11 @@
 from functools import lru_cache
 
-from pydantic import Field, ValidationInfo, field_validator
+from pydantic import Field, SecretStr, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 WEAK_JWT_SECRETS: frozenset[str] = frozenset({"change-me", "secret", "test", ""})
 JWT_SECRET_MIN_LENGTH = 32
+WEBHOOK_SECRET_KEY_MIN_LENGTH = 44
 
 
 class Settings(BaseSettings):
@@ -37,6 +38,8 @@ class Settings(BaseSettings):
     jwt_algorithm: str = Field(default="HS256")
     jwt_expiration_minutes: int = Field(default=60)
 
+    webhook_secret_key: SecretStr = Field(default=SecretStr(""))
+
     cors_origins: str = Field(default="http://localhost:3000")
 
     phoenix_endpoint: str | None = None
@@ -59,6 +62,23 @@ class Settings(BaseSettings):
             raise ValueError(
                 f"jwt_secret must be at least {JWT_SECRET_MIN_LENGTH} characters "
                 f"in environment={environment!r} (got {len(v)})"
+            )
+        return v
+
+    @field_validator("webhook_secret_key")
+    @classmethod
+    def validate_webhook_secret_key(
+        cls, v: SecretStr, info: ValidationInfo
+    ) -> SecretStr:
+        environment = info.data.get("environment", "development")
+        if environment == "development":
+            return v
+        raw = v.get_secret_value()
+        if len(raw) < WEBHOOK_SECRET_KEY_MIN_LENGTH:
+            raise ValueError(
+                "webhook_secret_key must be a base64-encoded Fernet key "
+                f"(>= {WEBHOOK_SECRET_KEY_MIN_LENGTH} chars) in "
+                f"environment={environment!r} (got {len(raw)})"
             )
         return v
 

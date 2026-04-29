@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.db import get_db
 from app.models import Project
 from app.services.rate_limit import WEBHOOK_RATE_LIMIT, limiter
+from app.services.webhook_secret import decrypt_webhook_secret
 
 logger = logging.getLogger(__name__)
 
@@ -26,15 +27,23 @@ class WebhookAck(BaseModel):
 
 async def _load_project_secret(session: AsyncSession, project_public_id: str) -> str:
     result = await session.execute(
-        select(Project.webhook_secret).where(Project.public_id == project_public_id)
+        select(Project.webhook_secret_encrypted).where(
+            Project.public_id == project_public_id
+        )
     )
-    secret = result.scalar_one_or_none()
-    if secret is None:
+    encrypted = result.scalar_one_or_none()
+    if encrypted is None:
         logger.warning(
             "[WEBHOOK] Unknown project public_id=%s — rejecting", project_public_id
         )
         raise HTTPException(status_code=401, detail="Invalid signature")
-    return secret
+    try:
+        return decrypt_webhook_secret(bytes(encrypted))
+    except RuntimeError:
+        logger.error(
+            "[WEBHOOK] Could not decrypt secret for project=%s", project_public_id
+        )
+        raise HTTPException(status_code=500, detail="Server misconfigured") from None
 
 
 def _verify_signature(secret: str, body: bytes, header_value: str) -> bool:

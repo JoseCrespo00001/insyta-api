@@ -109,6 +109,9 @@ async def seeded_two_orgs(postgres_engine: AsyncEngine) -> AsyncIterator[dict]:
                         "name": name,
                     },
                 )
+            from cryptography.fernet import Fernet
+
+            test_ws = Fernet(Fernet.generate_key()).encrypt(b"test-secret")
             for pid, oid, slug in [
                 (proj_a, org_a, f"proj-a-{proj_a.hex[:6]}"),
                 (proj_b, org_b, f"proj-b-{proj_b.hex[:6]}"),
@@ -116,7 +119,7 @@ async def seeded_two_orgs(postgres_engine: AsyncEngine) -> AsyncIterator[dict]:
                 await s.execute(
                     text(
                         "INSERT INTO projects"
-                        "(id, public_id, org_id, slug, name, webhook_secret) "
+                        "(id, public_id, org_id, slug, name, webhook_secret_encrypted) "
                         "VALUES (:id, :pid, :oid, :slug, :name, :ws)"
                     ),
                     {
@@ -125,7 +128,7 @@ async def seeded_two_orgs(postgres_engine: AsyncEngine) -> AsyncIterator[dict]:
                         "oid": oid,
                         "slug": slug,
                         "name": "Project",
-                        "ws": "test-secret",
+                        "ws": test_ws,
                     },
                 )
             for aid, pid, oid in [

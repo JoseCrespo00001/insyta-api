@@ -5,32 +5,49 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import os
 from collections.abc import AsyncIterator
 
 import pytest
+from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
-from app.core.db import get_db
-from app.main import app
-from app.services import rate_limit as rate_limit_module
+# Set the Fernet key BEFORE importing routers so the helper picks it up.
+_FERNET_KEY = Fernet.generate_key()
+os.environ.setdefault("WEBHOOK_SECRET_KEY", _FERNET_KEY.decode())
+
+from app.core.config import get_settings  # noqa: E402
+
+get_settings.cache_clear()
+
+from app.core.db import get_db  # noqa: E402
+from app.main import app  # noqa: E402
+from app.services import rate_limit as rate_limit_module  # noqa: E402
+from app.services.webhook_secret import (  # noqa: E402
+    _fernet,
+    encrypt_webhook_secret,
+)
+
+_fernet.cache_clear()
 
 PROJECT_ID = "proj_rl_test"
 SECRET = "rate-limit-test-secret-32-chars--"
+SECRET_ENCRYPTED = encrypt_webhook_secret(SECRET)
 
 
 class _ScalarResult:
-    def __init__(self, value: str | None) -> None:
+    def __init__(self, value: bytes | None) -> None:
         self._value = value
 
-    def scalar_one_or_none(self) -> str | None:
+    def scalar_one_or_none(self) -> bytes | None:
         return self._value
 
 
 class _StubSession:
     async def execute(self, stmt):  # type: ignore[no-untyped-def]
-        return _ScalarResult(SECRET)
+        return _ScalarResult(SECRET_ENCRYPTED)
 
 
 async def _override_get_db() -> AsyncIterator[_StubSession]:

@@ -17,6 +17,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     Numeric,
     String,
     Text,
@@ -70,7 +71,7 @@ class Project(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     environment: Mapped[str] = mapped_column(String(8), nullable=False, default="live")
-    webhook_secret: Mapped[str] = mapped_column(String(128), nullable=False)
+    webhook_secret_encrypted: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     retention_days: Mapped[int] = mapped_column(Integer, nullable=False, default=30)
     alert_thresholds: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
