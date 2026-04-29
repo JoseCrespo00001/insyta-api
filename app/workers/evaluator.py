@@ -20,6 +20,7 @@ from app.core.db import async_session_factory
 from app.llm.router import FatalLLMError, LLMRouter, TransientLLMError
 from app.models import Conversation, Evaluation, Message
 from app.services.celery_app import celery_app
+from app.services.feed_bus import publish_eval_event  # EQUIP-96 (ADR 0005)
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +122,29 @@ async def _run_eval(conv_id: uuid.UUID) -> dict:
         was_new = await _persist_evaluation(
             session, conv=conv, parsed=parsed, usage=usage
         )
+        # EQUIP-96 (ADR 0005): publish to the tenant SSE channel and dispatch
+        # alerts on a fresh insert. Skipped on duplicate (was_new=False) so a
+        # replay does not re-fire alerts or re-broadcast events.
+        if was_new:
+            evaluation_id_result = await session.execute(
+                select(Evaluation.id, Evaluation.evaluated_at).where(
+                    Evaluation.conversation_id == conv.id
+                )
+            )
+            ev_row = evaluation_id_result.one_or_none()
+            if ev_row is not None:
+                publish_eval_event(
+                    org_id=conv.org_id,
+                    conv_id=conv.id,
+                    project_id=conv.project_id,
+                    score=parsed.score,
+                    topic=parsed.topic,
+                    evaluated_at=ev_row.evaluated_at,
+                )
+                celery_app.send_task(
+                    "app.workers.alerts.dispatch_alerts",
+                    args=[str(ev_row.id)],
+                )
 
     logger.info(
         "[EVAL] conv=%s model=%s tokens=%d cost=%s cache_read=%d new=%s",

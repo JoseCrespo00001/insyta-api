@@ -10,6 +10,7 @@ from slowapi.middleware import SlowAPIMiddleware
 from app.core.config import WEAK_JWT_SECRETS, get_settings
 from app.routers import (
     conversations,
+    feed,
     health,
     me,
     projects,
@@ -69,6 +70,7 @@ def create_app() -> FastAPI:
     app.include_router(projects.router)
     app.include_router(conversations.router)
     app.include_router(uploads.router)
+    app.include_router(feed.router)
     app.include_router(track.router)
     app.include_router(webhooks.router)
 
