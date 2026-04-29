@@ -6,6 +6,7 @@ metadata. Importing this package registers every model on `Base.metadata`.
 
 from __future__ import annotations
 
+from app.models.audit import Alert, WebhookEvent
 from app.models.base import Base
 from app.models.tenancy import (
     Agent,
@@ -21,6 +22,7 @@ from app.models.uploads import Upload
 
 __all__ = [
     "Agent",
+    "Alert",
     "ApiKey",
     "Base",
     "Conversation",
@@ -30,4 +32,5 @@ __all__ = [
     "Project",
     "Upload",
     "User",
+    "WebhookEvent",
 ]

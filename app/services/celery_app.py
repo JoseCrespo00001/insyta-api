@@ -35,6 +35,9 @@ def _build_celery() -> Celery:
             "app.workers.processor",
             "app.workers.evaluator",
             "app.workers.scheduler",
+            "app.workers.webhook_processor",
+            "app.workers.alerts",
+            "app.workers.retention",
         ],
     )
     app.conf.update(
@@ -54,6 +57,10 @@ def _build_celery() -> Celery:
         "close-stale-conversations": {
             "task": "app.workers.scheduler.close_stale_conversations",
             "schedule": crontab(minute="*/5"),
+        },
+        "retention-archive-and-purge": {
+            "task": "app.workers.retention.run_retention",
+            "schedule": crontab(hour=3, minute=15),
         },
     }
     return app
