@@ -37,17 +37,40 @@ SECRET = "rate-limit-test-secret-32-chars--"
 SECRET_ENCRYPTED = encrypt_webhook_secret(SECRET)
 
 
-class _ScalarResult:
-    def __init__(self, value: bytes | None) -> None:
-        self._value = value
+class _StubRow:
+    def __init__(self) -> None:
+        import uuid as _uuid
 
-    def scalar_one_or_none(self) -> bytes | None:
-        return self._value
+        self.id = _uuid.uuid4()
+        self.org_id = _uuid.uuid4()
+        self.webhook_secret_encrypted = SECRET_ENCRYPTED
+
+
+class _StubResult:
+    def __init__(self, *, row=None, scalar=None) -> None:
+        self._row = row
+        self._scalar = scalar
+
+    def one_or_none(self):
+        return self._row
+
+    def scalar_one_or_none(self):
+        return self._scalar
 
 
 class _StubSession:
     async def execute(self, stmt):  # type: ignore[no-untyped-def]
-        return _ScalarResult(SECRET_ENCRYPTED)
+        stmt_text = str(stmt)
+        if "FROM projects" in stmt_text:
+            return _StubResult(row=_StubRow())
+        if "INTO webhook_events" in stmt_text:
+            import uuid as _uuid
+
+            return _StubResult(scalar=_uuid.uuid4())
+        return _StubResult(row=None, scalar=None)
+
+    async def commit(self):
+        pass
 
 
 async def _override_get_db() -> AsyncIterator[_StubSession]:
@@ -62,7 +85,10 @@ def _sign(body: bytes) -> str:
 def small_limit_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     """Replaces the production limiter with an in-memory 5/minute limiter.
 
-    Patching a smaller limit keeps the test fast (no need for 1000 reqs).
+    Patching a smaller limit keeps the test fast (no need for 1000 reqs). The
+    webhooks module is reloaded so the decorator captures the small limit;
+    teardown reloads it again with the production constants so other test
+    files (test_webhooks.py etc.) see the original 1000/minute decorator.
     """
     test_limiter = Limiter(
         key_func=get_remote_address,
@@ -80,8 +106,8 @@ def small_limit_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     reload(webhooks_module)
 
     new_app = app
+    original_routes = list(new_app.router.routes)
     new_app.state.limiter = test_limiter
-    # Replace router with the freshly-reloaded one.
     new_app.router.routes = [
         r
         for r in new_app.router.routes
@@ -92,7 +118,18 @@ def small_limit_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
 
     with TestClient(new_app) as c:
         yield c
+
     new_app.dependency_overrides.clear()
+    monkeypatch.undo()
+    # Reload again so the decorator is bound to the production limit and
+    # production limiter (1000/minute, conftest's memory limiter).
+    reload(webhooks_module)
+    new_app.router.routes = [
+        r
+        for r in original_routes
+        if not (getattr(r, "path", "").startswith("/webhooks/"))
+    ]
+    new_app.include_router(webhooks_module.router)
 
 
 class TestRateLimit:

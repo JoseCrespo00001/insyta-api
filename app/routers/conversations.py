@@ -63,7 +63,17 @@ class EvaluationOut(BaseModel):
     resolution: bool | None
     satisfaction: int | None
     tone: str | None
+    frustration: bool | None
+    escalated: bool | None
+    efficiency: int | None
+    scope_violation: bool | None
+    topic: str | None
     summary: str | None
+    model_used: str | None
+    tokens_used: int | None
+    cost_usd: str | None
+    phoenix_span_id: str | None
+    evaluated_at: str | None
 
 
 class ConversationDetail(BaseModel):
@@ -224,7 +234,25 @@ async def get_conversation_detail(
                 resolution=evaluation.resolution,
                 satisfaction=evaluation.satisfaction,
                 tone=evaluation.tone,
+                frustration=evaluation.frustration,
+                escalated=evaluation.escalated,
+                efficiency=evaluation.efficiency,
+                scope_violation=evaluation.scope_violation,
+                topic=evaluation.topic,
                 summary=evaluation.summary,
+                model_used=evaluation.model_used,
+                tokens_used=evaluation.tokens_used,
+                cost_usd=(
+                    str(evaluation.cost_usd)
+                    if evaluation.cost_usd is not None
+                    else None
+                ),
+                phoenix_span_id=evaluation.phoenix_span_id,
+                evaluated_at=(
+                    evaluation.evaluated_at.isoformat()
+                    if evaluation.evaluated_at
+                    else None
+                ),
             )
             if evaluation
             else None
