@@ -330,6 +330,57 @@ class ApiKey(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
 
 
+class Improvement(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """One detected failure pattern + prompt proposal from the Optimization Loop.
+
+    Each row represents a single pattern for a single sub-agent, produced by
+    the Sonnet-based analysis. `status` lifecycle: pending → accepted | rejected.
+    `prompt_before` / `prompt_after` are the full prompt texts so the loop is
+    self-contained without needing the filesystem at read time.
+    """
+
+    __tablename__ = "improvements"
+
+    public_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("organizations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    agent_slug: Mapped[str] = mapped_column(String(64), nullable=False)
+    pattern: Mapped[str] = mapped_column(Text, nullable=False)
+    root_cause: Mapped[str] = mapped_column(Text, nullable=False)
+    prompt_before: Mapped[str | None] = mapped_column(Text, nullable=True)
+    prompt_after: Mapped[str] = mapped_column(Text, nullable=False)
+    impact_estimate: Mapped[str] = mapped_column(
+        String(8), nullable=False, default="medio"
+    )
+    affected_conv_ids: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    sample_excerpts: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    prompt_version_label: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="v1"
+    )
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+
+    __table_args__ = (
+        Index("ix_improvements_project_id_created_at", "project_id", "created_at"),
+        Index("ix_improvements_project_id_agent_slug", "project_id", "agent_slug"),
+        CheckConstraint(
+            "status IN ('pending','accepted','rejected')",
+            name="improvement_status_enum",
+        ),
+        CheckConstraint(
+            "impact_estimate IN ('alto','medio','bajo')",
+            name="improvement_impact_enum",
+        ),
+    )
+
+
 # Relationships are kept light to avoid implicit eager loading; downstream
 # services explicitly join via SQL where needed.
 Organization.projects = relationship(  # type: ignore[attr-defined]
