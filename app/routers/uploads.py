@@ -93,8 +93,11 @@ async def create_upload(
     current_user: CurrentUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_with_tenant_context),
 ) -> UploadCreatedResponse:
-    if not file.filename or not file.filename.lower().endswith(".csv"):
-        raise HTTPException(status_code=400, detail="Only .csv files are accepted")
+    if not file.filename or not file.filename.lower().endswith((".csv", ".txt")):
+        raise HTTPException(
+            status_code=400,
+            detail="Solo se aceptan archivos .csv o .txt (export de WhatsApp)",
+        )
 
     content = await file.read()
     if len(content) > MAX_UPLOAD_BYTES:

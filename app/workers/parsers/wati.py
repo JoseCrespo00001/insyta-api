@@ -89,6 +89,10 @@ def parse(file_bytes: bytes) -> Iterator[ConversationDTO]:
         )
         bucket = buckets[conv_id]
         bucket.external_id = conv_id
+        # Optional conversation name (first non-empty wins).
+        name = (row.get("contact_name") or "").strip()
+        if name and not bucket.contact_name:
+            bucket.contact_name = name
         bucket.messages.append(msg)
         if bucket.started_at is None or ts < bucket.started_at:
             bucket.started_at = ts

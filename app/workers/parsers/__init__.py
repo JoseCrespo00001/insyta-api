@@ -17,7 +17,7 @@ from app.workers.parsers.base import (
 )
 
 # Side-effect imports: each module registers itself in PARSERS on import.
-from app.workers.parsers import custom, respondio, wati  # noqa: F401, E402
+from app.workers.parsers import custom, respondio, wati, whatsapp  # noqa: F401, E402
 
 __all__ = [
     "ConversationDTO",

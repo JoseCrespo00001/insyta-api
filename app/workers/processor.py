@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.db import tenant_txn
+from app.core.db import engine, tenant_txn
 from app.models import Message, Upload
 from app.services.celery_app import celery_app
 from app.services.idempotency import upsert_conversation_idempotent
@@ -57,10 +57,15 @@ async def _load_upload_blob(
             "agent_id": str(upload.agent_id),
             "upload_id": str(upload.id),
             "storage_path": upload.storage_path,
+            "filename": upload.filename or "",
         }
     with open(meta["storage_path"], "rb") as fh:
         csv_bytes = fh.read()
-    return csv_bytes, DEFAULT_PLATFORM, meta
+    # WhatsApp export (.txt) vs CSV canónico (custom_sdk).
+    platform = (
+        "whatsapp" if meta["filename"].lower().endswith(".txt") else DEFAULT_PLATFORM
+    )
+    return csv_bytes, platform, meta
 
 
 def _preview(messages: Iterable) -> str:
@@ -131,6 +136,7 @@ async def process_conversations(
                     "preview": _preview(msgs),
                     "message_count": len(msgs),
                     "status": "completed",
+                    "contact_name": dto.contact_name,
                     "ended_at": msgs[-1].timestamp if msgs else None,
                 },
             )
@@ -167,6 +173,23 @@ async def _run(upload_id: uuid.UUID, org_id: uuid.UUID) -> dict:
     org_id = uuid.UUID(meta["org_id"])
     agent_id = uuid.UUID(meta["agent_id"])
 
+    # Si el CSV no trajo conversaciones (columnas erróneas), fallar con mensaje
+    # claro en vez de "completar" con 0 en silencio.
+    if not parsed:
+        await _set_upload_status(
+            upload_id,
+            org_id,
+            status="failed",
+            rows_total=0,
+            rows_processed=0,
+            error_message=(
+                "No se detectaron conversaciones. El CSV debe tener columnas: "
+                "conversation_id, role, content, timestamp."
+            ),
+            finished_at=datetime.now(timezone.utc),
+        )
+        return {"upload_id": str(upload_id), "parsed_conversations": 0}
+
     await _set_upload_status(
         upload_id,
         org_id,
@@ -198,6 +221,15 @@ async def _run(upload_id: uuid.UUID, org_id: uuid.UUID) -> dict:
     return summary
 
 
+async def _run_and_dispose(upload_id: uuid.UUID, org_id: uuid.UUID) -> dict:
+    # Each Celery task runs in a fresh asyncio loop; dispose the shared engine
+    # at the end so pooled asyncpg connections don't leak across loops.
+    try:
+        return await _run(upload_id, org_id)
+    finally:
+        await engine.dispose()
+
+
 @celery_app.task(name="app.workers.processor.process_upload", bind=True)
 def process_upload(self, upload_id: str, org_id: str) -> dict:
-    return asyncio.run(_run(uuid.UUID(upload_id), uuid.UUID(org_id)))
+    return asyncio.run(_run_and_dispose(uuid.UUID(upload_id), uuid.UUID(org_id)))

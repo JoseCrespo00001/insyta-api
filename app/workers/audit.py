@@ -24,7 +24,7 @@ from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.db import tenant_txn
+from app.core.db import engine, tenant_txn
 from app.llm.audit_judge import judge_messages
 from app.llm.router import FatalLLMError, LLMRouter
 from app.models import (
@@ -327,22 +327,32 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
     }
 
 
+async def _run_and_dispose(aid: uuid.UUID, oid: uuid.UUID) -> dict:
+    try:
+        return await _run(aid, oid)
+    finally:
+        await engine.dispose()
+
+
 @celery_app.task(name="app.workers.audit.run_audit", bind=True)
 def run_audit(self, audit_id: str, org_id: str) -> dict:
     aid = uuid.UUID(audit_id)
     oid = uuid.UUID(org_id)
     try:
-        return asyncio.run(_run(aid, oid))
+        return asyncio.run(_run_and_dispose(aid, oid))
     except FatalLLMError as exc:
         logger.warning("[AUDIT] no LLM key, marking audit %s failed: %s", aid, exc)
 
         async def _fail() -> None:
-            async with tenant_txn(oid) as session:
-                await session.execute(
-                    update(Audit)
-                    .where(Audit.id == aid)
-                    .values(status="failed", error_message=str(exc))
-                )
+            try:
+                async with tenant_txn(oid) as session:
+                    await session.execute(
+                        update(Audit)
+                        .where(Audit.id == aid)
+                        .values(status="failed", error_message=str(exc))
+                    )
+            finally:
+                await engine.dispose()
 
         asyncio.run(_fail())
         return {"audit_id": audit_id, "status": "failed", "error": str(exc)}
