@@ -152,20 +152,16 @@ async def _seed_org_and_project(su_engine: AsyncEngine) -> dict:
                     "slug": f"org-{org_id.hex[:6]}",
                 },
             )
-            from cryptography.fernet import Fernet
-
-            test_ws = Fernet(Fernet.generate_key()).encrypt(b"test-secret")
             await s.execute(
                 text(
                     "INSERT INTO projects"
-                    "(id, public_id, org_id, slug, name, webhook_secret_encrypted) "
-                    "VALUES (:id, :pid, :org, 'p', 'P', :ws)"
+                    "(id, public_id, org_id, slug, name) "
+                    "VALUES (:id, :pid, :org, 'p', 'P')"
                 ),
                 {
                     "id": proj_id,
                     "pid": proj_public,
                     "org": org_id,
-                    "ws": test_ws,
                 },
             )
     return {"org_id": org_id, "proj_id": proj_id, "proj_public": proj_public}

@@ -96,11 +96,17 @@ async def test_alembic_round_trip():
             "organizations",
             "projects",
             "agents",
+            "uploads",
             "conversations",
             "messages",
             "evaluations",
             "users",
-            "api_keys",
+            "flows",
+            "audits",
+            "audit_conversations",
+            "message_evaluations",
+            "improvements",
+            "improvement_conversations",
         }
         assert expected.issubset(tables), tables
     finally:

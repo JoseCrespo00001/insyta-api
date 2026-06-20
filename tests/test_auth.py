@@ -76,10 +76,10 @@ def test_valid_token_returns_user_payload(client: TestClient):
     response = client.get("/api/v1/me", headers={"Authorization": f"Bearer {token}"})
     assert response.status_code == 200
     body = response.json()
-    assert body["user_id"] == "user-123"
+    assert body["userId"] == "user-123"
     assert body["email"] == "user@insyta.io"
-    assert body["org_id"] == org_id
-    assert set(body["allowed_project_ids"]) == {proj_a, proj_b}
+    assert body["orgId"] == org_id
+    assert set(body["allowedProjectIds"]) == {proj_a, proj_b}
 
 
 def test_token_with_invalid_org_id_uuid_returns_403(client: TestClient):
@@ -100,7 +100,7 @@ def test_app_metadata_org_id_fallback(client: TestClient):
     )
     response = client.get("/api/v1/me", headers={"Authorization": f"Bearer {token}"})
     assert response.status_code == 200
-    assert response.json()["org_id"] == org_id
+    assert response.json()["orgId"] == org_id
 
 
 def test_get_current_user_dataclass_shape():

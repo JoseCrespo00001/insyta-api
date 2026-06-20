@@ -1,57 +1,110 @@
 """Project CRUD.
 
-POST /api/v1/projects creates a project under the caller's org. The webhook
-secret is generated server-side, returned RAW once in the response, and stored
-encrypted (Fernet) in the database. RLS enforces org isolation; uniqueness is
-`(org_id, slug)`.
+POST /api/v1/projects creates a project under the caller's org. RLS enforces
+org isolation; uniqueness is `(org_id, slug)`. The slug is derived from the name
+when not provided (the dashboard's new-project dialog only sends a name).
 """
 
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import CurrentUser, get_current_user
 from app.core.db import get_db_with_tenant_context
-from app.models import Project
-from app.services.webhook_secret import (
-    encrypt_webhook_secret,
-    generate_raw_webhook_secret,
-)
+from app.models import Agent, Conversation, Evaluation, Project
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["projects"])
 
 
+def _slugify(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+    return slug or f"project-{uuid.uuid4().hex[:8]}"
+
+
 class ProjectCreate(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
-            "example": {
-                "name": "Bot Ventas Q1",
-                "slug": "bot-ventas-q1",
-                "description": "Sales WhatsApp bot",
-            }
+            "example": {"name": "Bot Ventas Q1", "description": "Sales WhatsApp bot"}
         }
     )
 
     name: str = Field(..., min_length=1, max_length=200)
-    slug: str = Field(..., min_length=1, max_length=64, pattern=r"^[a-z0-9][a-z0-9-]*$")
+    slug: str | None = Field(
+        default=None, max_length=64, pattern=r"^[a-z0-9][a-z0-9-]*$"
+    )
     description: str | None = Field(default=None, max_length=2000)
 
 
 class ProjectCreateResponse(BaseModel):
-    public_id: str
+    public_id: str = Field(serialization_alias="publicId")
     name: str
     slug: str
-    webhook_secret: str = Field(
-        description="Raw webhook secret. Returned once — store it now; not retrievable later."
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class ProjectListItem(BaseModel):
+    public_id: str = Field(serialization_alias="publicId")
+    name: str
+    agent_count: int = Field(serialization_alias="agentCount")
+    conversation_count: int = Field(serialization_alias="conversationCount")
+    score: int | None
+    updated_at: str = Field(serialization_alias="updatedAt")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+@router.get("/projects", response_model=list[ProjectListItem])
+async def list_projects(
+    session: AsyncSession = Depends(get_db_with_tenant_context),
+) -> list[ProjectListItem]:
+    projects = (
+        (await session.execute(select(Project).order_by(Project.created_at.desc())))
+        .scalars()
+        .all()
     )
+    out: list[ProjectListItem] = []
+    for p in projects:
+        agent_count = (
+            await session.execute(
+                select(func.count(Agent.id)).where(Agent.project_id == p.id)
+            )
+        ).scalar_one()
+        conv_count = (
+            await session.execute(
+                select(func.count(Conversation.id)).where(
+                    Conversation.project_id == p.id
+                )
+            )
+        ).scalar_one()
+        avg = (
+            await session.execute(
+                select(func.avg(Evaluation.score)).where(
+                    Evaluation.project_id == p.id, Evaluation.score.isnot(None)
+                )
+            )
+        ).scalar_one()
+        out.append(
+            ProjectListItem(
+                public_id=p.public_id,
+                name=p.name,
+                agent_count=int(agent_count or 0),
+                conversation_count=int(conv_count or 0),
+                score=round(avg) if avg is not None else None,
+                updated_at=p.updated_at.isoformat(),
+            )
+        )
+    return out
 
 
 @router.post(
@@ -64,17 +117,15 @@ async def create_project(
     current_user: CurrentUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_with_tenant_context),
 ) -> ProjectCreateResponse:
-    raw_secret = generate_raw_webhook_secret()
-    encrypted = encrypt_webhook_secret(raw_secret)
+    slug = payload.slug or _slugify(payload.name)
     public_id = f"proj_{uuid.uuid4().hex[:24]}"
 
     project = Project(
         public_id=public_id,
         org_id=current_user.org_id,
-        slug=payload.slug,
+        slug=slug,
         name=payload.name,
         description=payload.description,
-        webhook_secret_encrypted=encrypted,
     )
     session.add(project)
     try:
@@ -83,22 +134,17 @@ async def create_project(
         logger.info(
             "[PROJECTS] Duplicate slug org_id=%s slug=%s",
             current_user.org_id,
-            payload.slug,
+            slug,
         )
         raise HTTPException(
             status_code=409,
-            detail=f"Project slug '{payload.slug}' already exists in this organization",
+            detail=f"Project slug '{slug}' already exists in this organization",
         ) from exc
 
     logger.info(
         "[PROJECTS] Created public_id=%s org_id=%s slug=%s",
         public_id,
         current_user.org_id,
-        payload.slug,
+        slug,
     )
-    return ProjectCreateResponse(
-        public_id=public_id,
-        name=payload.name,
-        slug=payload.slug,
-        webhook_secret=raw_secret,
-    )
+    return ProjectCreateResponse(public_id=public_id, name=payload.name, slug=slug)

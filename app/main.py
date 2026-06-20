@@ -3,22 +3,20 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from slowapi import _rate_limit_exceeded_handler
-from slowapi.errors import RateLimitExceeded
-from slowapi.middleware import SlowAPIMiddleware
 
 from app.core.config import WEAK_JWT_SECRETS, get_settings
 from app.routers import (
+    audits,
+    auth,
     conversations,
-    feed,
+    dashboard,
+    flows,
     health,
+    improvements,
     me,
     projects,
-    track,
     uploads,
-    webhooks,
 )
-from app.services.rate_limit import limiter
 
 logger = logging.getLogger(__name__)
 
@@ -61,18 +59,16 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    app.state.limiter = limiter
-    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-    app.add_middleware(SlowAPIMiddleware)
-
     app.include_router(health.router)
+    app.include_router(auth.router)
     app.include_router(me.router)
     app.include_router(projects.router)
     app.include_router(conversations.router)
     app.include_router(uploads.router)
-    app.include_router(feed.router)
-    app.include_router(track.router)
-    app.include_router(webhooks.router)
+    app.include_router(flows.router)
+    app.include_router(audits.router)
+    app.include_router(improvements.router)
+    app.include_router(dashboard.router)
 
     return app
 

@@ -113,6 +113,43 @@ def _decode_token(token: str) -> dict:
             raise JWTError(str(exc)) from exc
 
 
+@dataclass(frozen=True)
+class TokenIdentity:
+    """Decoded Supabase identity without requiring an org binding (for bootstrap)."""
+
+    user_id: str
+    email: str
+
+
+async def _resolve_org_from_db(
+    supabase_user_id: str,
+) -> tuple[uuid.UUID, list[uuid.UUID]] | None:
+    """Look up the user's org by their Supabase id when the JWT has no org_id
+    claim. The `users` table is not under RLS so a plain session works. Returns
+    (org_id, allowed_project_ids) or None if the user isn't provisioned yet."""
+    try:
+        from sqlalchemy import select
+
+        from app.core.db import async_session_factory
+        from app.models import User
+
+        async with async_session_factory() as session:
+            row = (
+                await session.execute(
+                    select(User.org_id, User.allowed_project_ids).where(
+                        User.supabase_user_id == supabase_user_id
+                    )
+                )
+            ).one_or_none()
+        if row is None:
+            return None
+        allowed = _parse_uuid_list(row.allowed_project_ids)
+        return row.org_id, allowed
+    except Exception:
+        # DB unavailable → fall through to the no-org 403 path.
+        return None
+
+
 def _parse_uuid_list(value: object) -> list[uuid.UUID]:
     if value is None:
         return []
@@ -156,9 +193,20 @@ async def get_current_user(token: str | None = Depends(oauth2_scheme)) -> Curren
             detail="Token missing required claims (sub/email)",
         )
     if not org_id_str:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Token has no org_id claim — user not bound to an organization",
+        # No org claim — resolve it from the users table (provisioned at signup).
+        resolved = await _resolve_org_from_db(str(user_id))
+        if resolved is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Token has no org_id claim — user not bound to an organization",
+            )
+        org_id, allowed = resolved
+        return CurrentUser(
+            user_id=str(user_id),
+            email=str(email),
+            org_id=org_id,
+            allowed_project_ids=allowed,
+            raw_claims=claims,
         )
     try:
         org_id = uuid.UUID(str(org_id_str))
@@ -180,3 +228,35 @@ async def get_current_user(token: str | None = Depends(oauth2_scheme)) -> Curren
         allowed_project_ids=allowed,
         raw_claims=claims,
     )
+
+
+async def get_token_identity(
+    token: str | None = Depends(oauth2_scheme),
+) -> TokenIdentity:
+    """Decode the Supabase JWT to (user_id, email) WITHOUT requiring an org.
+
+    Used by the bootstrap endpoint, which provisions the org+user the first
+    time a freshly-signed-up Supabase user hits the API.
+    """
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing bearer token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    try:
+        claims = _decode_token(token)
+    except JWTError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Invalid token: {exc}",
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from exc
+    user_id = claims.get("sub")
+    email = claims.get("email")
+    if not user_id or not email:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token missing required claims (sub/email)",
+        )
+    return TokenIdentity(user_id=str(user_id), email=str(email))

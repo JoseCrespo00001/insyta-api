@@ -36,6 +36,7 @@ async def upsert_conversation_idempotent(
     platform: str,
     public_id: str,
     started_at: datetime | None = None,
+    upload_id: uuid.UUID | None = None,
     extra: dict[str, Any] | None = None,
 ) -> tuple[Conversation, bool]:
     """Insert a conversation if `(agent_id, external_id)` is new, else fetch existing.
@@ -56,6 +57,10 @@ async def upsert_conversation_idempotent(
     }
     if started_at is not None:
         values["started_at"] = started_at
+    if upload_id is not None:
+        values["upload_id"] = upload_id
+    if extra:
+        values.update(extra)
 
     stmt = (
         pg_insert(Conversation)

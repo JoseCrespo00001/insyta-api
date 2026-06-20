@@ -102,19 +102,16 @@ async def _seed_two_orgs(su_engine: AsyncEngine) -> dict:
                     ),
                     {"id": oid, "pid": f"org_{oid.hex[:16]}", "slug": slug},
                 )
-            from cryptography.fernet import Fernet
-
-            test_ws = Fernet(Fernet.generate_key()).encrypt(b"test-secret")
             for pid, oid, pub, slug in [
                 (proj_a, org_a, proj_a_public, f"proj-a-{proj_a.hex[:6]}"),
                 (proj_b, org_b, proj_b_public, f"proj-b-{proj_b.hex[:6]}"),
             ]:
                 await s.execute(
                     text(
-                        "INSERT INTO projects(id, public_id, org_id, slug, name, webhook_secret_encrypted) "
-                        "VALUES (:id, :pid, :oid, :slug, 'P', :ws)"
+                        "INSERT INTO projects(id, public_id, org_id, slug, name) "
+                        "VALUES (:id, :pid, :oid, :slug, 'P')"
                     ),
-                    {"id": pid, "pid": pub, "oid": oid, "slug": slug, "ws": test_ws},
+                    {"id": pid, "pid": pub, "oid": oid, "slug": slug},
                 )
             for aid, pid, oid in [(agent_a, proj_a, org_a), (agent_b, proj_b, org_b)]:
                 await s.execute(

@@ -16,8 +16,6 @@ from collections.abc import AsyncIterator
 
 import pytest
 import pytest_asyncio
-from slowapi import Limiter
-from slowapi.util import get_remote_address
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -26,14 +24,20 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-from app.services import rate_limit as _rate_limit_module
 
-_rate_limit_module.limiter = Limiter(
-    key_func=get_remote_address,
-    storage_uri="memory://",
-    strategy="fixed-window",
-    default_limits=[],
-)
+@pytest_asyncio.fixture(autouse=True)
+async def _dispose_module_engine():
+    """Dispose the module-level async engine after each test so its pooled
+    asyncpg connections (bound to this test's event loop) don't leak into the
+    next test's loop ('attached to a different loop' / 'Event loop is closed')."""
+    yield
+    try:
+        from app.core import db
+
+        await db.engine.dispose()
+    except Exception:
+        pass
+
 
 TEST_DATABASE_URL = os.getenv(
     "TEST_DATABASE_URL",
@@ -109,9 +113,6 @@ async def seeded_two_orgs(postgres_engine: AsyncEngine) -> AsyncIterator[dict]:
                         "name": name,
                     },
                 )
-            from cryptography.fernet import Fernet
-
-            test_ws = Fernet(Fernet.generate_key()).encrypt(b"test-secret")
             for pid, oid, slug in [
                 (proj_a, org_a, f"proj-a-{proj_a.hex[:6]}"),
                 (proj_b, org_b, f"proj-b-{proj_b.hex[:6]}"),
@@ -119,8 +120,8 @@ async def seeded_two_orgs(postgres_engine: AsyncEngine) -> AsyncIterator[dict]:
                 await s.execute(
                     text(
                         "INSERT INTO projects"
-                        "(id, public_id, org_id, slug, name, webhook_secret_encrypted) "
-                        "VALUES (:id, :pid, :oid, :slug, :name, :ws)"
+                        "(id, public_id, org_id, slug, name) "
+                        "VALUES (:id, :pid, :oid, :slug, :name)"
                     ),
                     {
                         "id": pid,
@@ -128,7 +129,6 @@ async def seeded_two_orgs(postgres_engine: AsyncEngine) -> AsyncIterator[dict]:
                         "oid": oid,
                         "slug": slug,
                         "name": "Project",
-                        "ws": test_ws,
                     },
                 )
             for aid, pid, oid in [

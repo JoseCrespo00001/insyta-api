@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from fastapi import Depends
 from sqlalchemy import text
@@ -36,6 +37,10 @@ def _build_engine() -> AsyncEngine:
         pool_size=10,
         max_overflow=20,
         future=True,
+        # asyncpg + Supabase pooler (PgBouncer) can't reuse prepared statements
+        # across pooled connections; disabling the statement cache makes the
+        # engine work against the pooler and is harmless on direct connections.
+        connect_args={"statement_cache_size": 0},
     )
 
 
@@ -78,6 +83,30 @@ async def get_db_with_tenant_context(
             await session.execute(
                 text("SELECT set_config('app.allowed_projects', :v, true)"),
                 {"v": allowed},
+            )
+            yield session
+
+
+@asynccontextmanager
+async def tenant_txn(
+    org_id: uuid.UUID,
+    allowed_project_ids: list[uuid.UUID] | None = None,
+) -> AsyncIterator[AsyncSession]:
+    """Open a session inside a transaction with the tenant GUCs set, for
+    background workers / system ops. The transaction commits on clean exit.
+
+    Setting `app.current_org` is what lets writes pass RLS WITH CHECK under
+    FORCE RLS (Supabase, where the connection role is not a superuser).
+    """
+    async with async_session_factory() as session:
+        async with session.begin():
+            await session.execute(
+                text("SELECT set_config('app.current_org', :v, true)"),
+                {"v": str(org_id)},
+            )
+            await session.execute(
+                text("SELECT set_config('app.allowed_projects', :v, true)"),
+                {"v": ",".join(str(p) for p in (allowed_project_ids or []))},
             )
             yield session
 

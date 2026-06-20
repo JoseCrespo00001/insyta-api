@@ -6,14 +6,14 @@ metadata. Importing this package registers every model on `Base.metadata`.
 
 from __future__ import annotations
 
-from app.models.audit import Alert, WebhookEvent
+from app.models.audits import Audit, AuditConversation, MessageEvaluation
 from app.models.base import Base
+from app.models.flows import Flow
+from app.models.improvements import Improvement, ImprovementConversation
 from app.models.tenancy import (
     Agent,
-    ApiKey,
     Conversation,
     Evaluation,
-    Improvement,
     Message,
     Organization,
     Project,
@@ -23,16 +23,18 @@ from app.models.uploads import Upload
 
 __all__ = [
     "Agent",
-    "Alert",
-    "ApiKey",
+    "Audit",
+    "AuditConversation",
     "Base",
     "Conversation",
     "Evaluation",
+    "Flow",
     "Improvement",
+    "ImprovementConversation",
     "Message",
+    "MessageEvaluation",
     "Organization",
     "Project",
     "Upload",
     "User",
-    "WebhookEvent",
 ]

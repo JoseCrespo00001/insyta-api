@@ -1,7 +1,8 @@
 """ORM mappings for the multi-tenant core.
 
-Schema mirrors `04-technical/architecture.md:164-315`. RLS is enabled in the
-migration (not at ORM level) — these models are pure data shape.
+RLS is enabled in the migration (not at ORM level) — these models are pure data
+shape. Schema follows the Flujo + Auditoría product model that `insyta-web`
+consumes (see `insyta-web/src/lib/projects/types.ts`).
 """
 
 from __future__ import annotations
@@ -17,7 +18,6 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
-    LargeBinary,
     Numeric,
     String,
     Text,
@@ -40,10 +40,6 @@ class Organization(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         String(16), nullable=False, default="customer"
     )
     plan: Mapped[str] = mapped_column(String(32), nullable=False, default="free")
-    stripe_customer_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    stripe_subscription_id: Mapped[str | None] = mapped_column(
-        String(64), nullable=True
-    )
     white_label_config: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     __table_args__ = (
@@ -71,7 +67,6 @@ class Project(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     environment: Mapped[str] = mapped_column(String(8), nullable=False, default="live")
-    webhook_secret_encrypted: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     retention_days: Mapped[int] = mapped_column(Integer, nullable=False, default=30)
     alert_thresholds: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
@@ -100,15 +95,13 @@ class Agent(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     platform: Mapped[str] = mapped_column(String(32), nullable=False)
     system_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
-    prompt_versions: Mapped[list | None] = mapped_column(JSONB, nullable=True)
-    config: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
     __table_args__ = (
         UniqueConstraint("project_id", "slug", name="uq_agents_project_id_slug"),
         Index("ix_agents_project_id_created_at", "project_id", "created_at"),
         CheckConstraint(
-            "platform IN ('wati','respondio','manychat','custom_sdk')",
+            "platform IN ('wati','respondio','manychat','twilio','custom_sdk')",
             name="platform_enum",
         ),
     )
@@ -133,8 +126,16 @@ class Conversation(UUIDPrimaryKeyMixin, Base):
         ForeignKey("agents.id", ondelete="CASCADE"),
         nullable=False,
     )
+    upload_id: Mapped[uuid.UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("uploads.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     external_id: Mapped[str] = mapped_column(String(128), nullable=False)
     platform: Mapped[str] = mapped_column(String(32), nullable=False)
+    contact_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    contact_phone: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    preview: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -155,6 +156,7 @@ class Conversation(UUIDPrimaryKeyMixin, Base):
             "agent_id", "external_id", name="uq_conversations_agent_id_external_id"
         ),
         Index("ix_conversations_project_id_created_at", "project_id", "created_at"),
+        Index("ix_conversations_upload_id", "upload_id"),
         Index(
             "ix_conversations_project_id_agent_id_created_at",
             "project_id",
@@ -187,6 +189,7 @@ class Message(UUIDPrimaryKeyMixin, Base):
         ForeignKey("organizations.id", ondelete="CASCADE"),
         nullable=False,
     )
+    seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     role: Mapped[str] = mapped_column(String(16), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     content_anonymized: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -199,7 +202,7 @@ class Message(UUIDPrimaryKeyMixin, Base):
     )
 
     __table_args__ = (
-        Index("ix_messages_conversation_id_timestamp", "conversation_id", "timestamp"),
+        Index("ix_messages_conversation_id_seq", "conversation_id", "seq"),
         CheckConstraint("role IN ('user','assistant','system')", name="role_enum"),
     )
 
@@ -241,7 +244,11 @@ class Evaluation(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     model_used: Mapped[str | None] = mapped_column(String(64), nullable=True)
     tokens_used: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    tokens_input: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    tokens_output: Mapped[int | None] = mapped_column(Integer, nullable=True)
     cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(10, 6), nullable=True)
+    latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    phoenix_trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     phoenix_span_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     evaluated_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -284,100 +291,15 @@ class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         ForeignKey("organizations.id", ondelete="CASCADE"),
         nullable=False,
     )
-    role: Mapped[str] = mapped_column(String(16), nullable=False, default="member")
+    role: Mapped[str] = mapped_column(String(16), nullable=False, default="owner")
     allowed_project_ids: Mapped[list | None] = mapped_column(JSONB, nullable=True)
 
     __table_args__ = (
         CheckConstraint(
-            "role IN ('owner','admin','member','viewer')",
+            "role IN ('owner','admin','editor','member','viewer')",
             name="user_role_enum",
         ),
         Index("ix_users_org_id", "org_id"),
-    )
-
-
-class ApiKey(UUIDPrimaryKeyMixin, TimestampMixin, Base):
-    __tablename__ = "api_keys"
-
-    public_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
-    org_id: Mapped[uuid.UUID] = mapped_column(
-        PG_UUID(as_uuid=True),
-        ForeignKey("organizations.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    project_id: Mapped[uuid.UUID | None] = mapped_column(
-        PG_UUID(as_uuid=True),
-        ForeignKey("projects.id", ondelete="CASCADE"),
-        nullable=True,
-    )
-    prefix: Mapped[str] = mapped_column(String(32), nullable=False)
-    key_hash: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
-    scope: Mapped[str] = mapped_column(String(8), nullable=False)
-    environment: Mapped[str] = mapped_column(String(8), nullable=False)
-    name: Mapped[str | None] = mapped_column(String(200), nullable=True)
-    last_used_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    revoked_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-
-    __table_args__ = (
-        Index("ix_api_keys_org_id", "org_id"),
-        Index("ix_api_keys_project_id", "project_id"),
-        CheckConstraint("scope IN ('sk','pk')", name="api_key_scope_enum"),
-        CheckConstraint("environment IN ('live','test')", name="api_key_env_enum"),
-    )
-
-
-class Improvement(UUIDPrimaryKeyMixin, TimestampMixin, Base):
-    """One detected failure pattern + prompt proposal from the Optimization Loop.
-
-    Each row represents a single pattern for a single sub-agent, produced by
-    the Sonnet-based analysis. `status` lifecycle: pending → accepted | rejected.
-    `prompt_before` / `prompt_after` are the full prompt texts so the loop is
-    self-contained without needing the filesystem at read time.
-    """
-
-    __tablename__ = "improvements"
-
-    public_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
-    project_id: Mapped[uuid.UUID] = mapped_column(
-        PG_UUID(as_uuid=True),
-        ForeignKey("projects.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    org_id: Mapped[uuid.UUID] = mapped_column(
-        PG_UUID(as_uuid=True),
-        ForeignKey("organizations.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    agent_slug: Mapped[str] = mapped_column(String(64), nullable=False)
-    pattern: Mapped[str] = mapped_column(Text, nullable=False)
-    root_cause: Mapped[str] = mapped_column(Text, nullable=False)
-    prompt_before: Mapped[str | None] = mapped_column(Text, nullable=True)
-    prompt_after: Mapped[str] = mapped_column(Text, nullable=False)
-    impact_estimate: Mapped[str] = mapped_column(
-        String(8), nullable=False, default="medio"
-    )
-    affected_conv_ids: Mapped[list | None] = mapped_column(JSONB, nullable=True)
-    sample_excerpts: Mapped[list | None] = mapped_column(JSONB, nullable=True)
-    prompt_version_label: Mapped[str] = mapped_column(
-        String(16), nullable=False, default="v1"
-    )
-    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
-
-    __table_args__ = (
-        Index("ix_improvements_project_id_created_at", "project_id", "created_at"),
-        Index("ix_improvements_project_id_agent_slug", "project_id", "agent_slug"),
-        CheckConstraint(
-            "status IN ('pending','accepted','rejected')",
-            name="improvement_status_enum",
-        ),
-        CheckConstraint(
-            "impact_estimate IN ('alto','medio','bajo')",
-            name="improvement_impact_enum",
-        ),
     )
 
 

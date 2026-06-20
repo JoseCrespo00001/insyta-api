@@ -18,7 +18,6 @@ from __future__ import annotations
 import logging
 
 from celery import Celery
-from celery.schedules import crontab
 
 from app.core.config import get_settings
 
@@ -34,10 +33,7 @@ def _build_celery() -> Celery:
         include=[
             "app.workers.processor",
             "app.workers.evaluator",
-            "app.workers.scheduler",
-            "app.workers.webhook_processor",
-            "app.workers.alerts",
-            "app.workers.retention",
+            "app.workers.audit",
         ],
     )
     app.conf.update(
@@ -53,16 +49,9 @@ def _build_celery() -> Celery:
         task_track_started=True,
         result_expires=3600,
     )
-    app.conf.beat_schedule = {
-        "close-stale-conversations": {
-            "task": "app.workers.scheduler.close_stale_conversations",
-            "schedule": crontab(minute="*/5"),
-        },
-        "retention-archive-and-purge": {
-            "task": "app.workers.retention.run_retention",
-            "schedule": crontab(hour=3, minute=15),
-        },
-    }
+    # No periodic tasks for now — ingestion is CSV-driven and audits are
+    # user-triggered. (Live/real-time scheduling is deferred to a later sprint.)
+    app.conf.beat_schedule = {}
     return app
 
 

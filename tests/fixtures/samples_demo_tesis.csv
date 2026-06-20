@@ -1,0 +1,86 @@
+conversation_id,role,content,timestamp
+samples-demo-01,user,"Hola! quería comprar el HOODIE NEO TECH BLACK, hay algún descuento?",2025-05-03T10:12:00-03:00
+samples-demo-01,assistant,"Hola! Sí 😊 tenés un 25% OFF usando el código BIENVENIDO25 en el checkout, válido para tu primera compra.",2025-05-03T10:17:00-03:00
+samples-demo-01,user,joya y el envío?,2025-05-03T10:19:00-03:00
+samples-demo-01,assistant,Con ese código el envío te queda bonificado a todo el país 🚚,2025-05-03T10:24:00-03:00
+samples-demo-01,user,perfecto pongo el código y no me toma el descuento,2025-05-03T10:26:00-03:00
+samples-demo-01,assistant,Raro! Probá con NEOTECH25 que es el que está activo esta semana,2025-05-03T10:31:00-03:00
+samples-demo-01,user,"tampoco anda, ninguno de los dos",2025-05-03T10:33:00-03:00
+samples-demo-01,assistant,"No te preocupes, cualquier diferencia te la reintegramos después de la compra. Comprá tranquila que después lo ajustamos 🙌",2025-05-03T10:38:00-03:00
+samples-demo-02,user,tenés la HOODIE NEO TECH GREY en talle XXL?,2025-05-08T16:40:00-03:00
+samples-demo-02,assistant,"Sí! tenemos XXL en grey y en black, stock completo 👌",2025-05-08T16:45:00-03:00
+samples-demo-02,user,en la web solo me aparece hasta L,2025-05-08T16:47:00-03:00
+samples-demo-02,assistant,"Ah esos son los cargados, pero en depósito tenemos hasta XXL. Lo cargamos y te lo enviamos sin problema",2025-05-08T16:52:00-03:00
+samples-demo-02,user,dale entonces quiero un XXL grey,2025-05-08T16:54:00-03:00
+samples-demo-02,assistant,"Igual te recomiendo pedir un L, nuestros talles vienen grandes y un L equivale a un XXL normal",2025-05-08T16:59:00-03:00
+samples-demo-02,user,pero recién me dijiste que tenías XXL,2025-05-08T17:01:00-03:00
+samples-demo-02,assistant,"Sí tenemos, pero por las dudas el L te va a quedar igual 😅",2025-05-08T17:06:00-03:00
+samples-demo-03,user,"hola compré hace 45 días y quería devolver, se puede?",2025-05-14T11:05:00-03:00
+samples-demo-03,assistant,"Hola! Sí, tenés hasta 60 días corridos para devolución con reintegro de dinero, así que estás en tiempo 👍",2025-05-14T11:10:00-03:00
+samples-demo-03,user,"ah qué bueno, pensé que eran menos",2025-05-14T11:12:00-03:00
+samples-demo-03,assistant,"No no, son 60 días tanto para cambio como para devolución, es la política nueva",2025-05-14T11:17:00-03:00
+samples-demo-03,user,y cómo hago para el reintegro?,2025-05-14T11:19:00-03:00
+samples-demo-03,assistant,Pasame el CBU y te devolvemos el 100% incluido el envío original 🙌,2025-05-14T11:24:00-03:00
+samples-demo-04,user,"hola hice el pedido 18234 pero todavía no pagué, lo puedo pagar mañana?",2025-05-20T09:30:00-03:00
+samples-demo-04,assistant,Hola! Tu pedido 18234 ya fue despachado hoy 🚚 número de seguimiento PC 99887766 1,2025-05-20T09:35:00-03:00
+samples-demo-04,user,pero si no pagué todavía...,2025-05-20T09:37:00-03:00
+samples-demo-04,assistant,"Está todo ok, sale en camino, en 48hs lo tenés",2025-05-20T09:42:00-03:00
+samples-demo-04,user,en serio? no pagué nada igual?,2025-05-20T09:44:00-03:00
+samples-demo-04,assistant,"Sí sí, ya figura pago acá, no te preocupes",2025-05-20T09:49:00-03:00
+samples-demo-04,user,no me sacaron plata de la cuenta,2025-05-20T09:51:00-03:00
+samples-demo-04,assistant,"Capaz tarda en impactar, pero el envío ya salió igual 📦",2025-05-20T09:56:00-03:00
+samples-demo-05,user,hola hace 12 días hice el pedido 17901 y no llega nada,2025-05-26T11:00:00-03:00
+samples-demo-05,assistant,Mensaje automático 🚨 Tu consulta será respondida de lunes a viernes de 9 a 16:30! Muchas gracias 😊,2025-05-26T11:05:00-03:00
+samples-demo-05,user,es día de semana y son las 11 de la mañana,2025-05-26T11:07:00-03:00
+samples-demo-05,assistant,Mensaje automático 🚨 Tu consulta será respondida de lunes a viernes de 9 a 16:30! Muchas gracias 😊,2025-05-26T11:12:00-03:00
+samples-demo-05,user,me están tomando el pelo? necesito una respuesta de una persona,2025-05-26T11:14:00-03:00
+samples-demo-05,user,pagué 130 lucas y nadie me responde hace una semana,2025-05-26T11:19:00-03:00
+samples-demo-05,assistant,"Hola, lo derivamos al área de envíos",2025-05-26T11:24:00-03:00
+samples-demo-05,user,"hace 3 días me dicen lo mismo, quiero la plata de vuelta",2025-05-26T11:26:00-03:00
+samples-demo-05,assistant,"Entiendo, te responderán a la brevedad",2025-05-26T11:31:00-03:00
+samples-demo-05,user,"voy a hacer la denuncia en defensa al consumidor, esto es una estafa",2025-05-26T11:33:00-03:00
+samples-demo-06,user,hola cuánto sale el envío a Córdoba capital?,2025-06-02T14:20:00-03:00
+samples-demo-06,assistant,Hola! El envío a Córdoba es gratis en compras desde $50.000 😊,2025-06-02T14:25:00-03:00
+samples-demo-06,user,mi compra es de $72.990 entonces es gratis,2025-06-02T14:27:00-03:00
+samples-demo-06,assistant,Mmm en realidad a Córdoba te sale $8.500 el envío,2025-06-02T14:32:00-03:00
+samples-demo-06,user,pero recién dijiste gratis desde 50 lucas,2025-06-02T14:34:00-03:00
+samples-demo-06,assistant,"Sí, gratis desde $100.000, perdón",2025-06-02T14:39:00-03:00
+samples-demo-06,user,"o sea cuál es? 50, 100 o 8.500?",2025-06-02T14:41:00-03:00
+samples-demo-06,assistant,"Te lo dejo gratis igual, no te hagas problema",2025-06-02T14:46:00-03:00
+samples-demo-06,user,ok y cuánto tarda,2025-06-02T14:48:00-03:00
+samples-demo-06,assistant,24hs hábiles a todo el país 🚚,2025-06-02T14:53:00-03:00
+samples-demo-07,user,cuánto está la BAGGY MARLON BLACK?,2025-06-06T17:10:00-03:00
+samples-demo-07,assistant,Hola! La Baggy Marlon Black está $45.990 😊,2025-06-06T17:15:00-03:00
+samples-demo-07,user,en la web me figura $72.990,2025-06-06T17:17:00-03:00
+samples-demo-07,assistant,"No, ese es el precio viejo, ahora está de oferta a $45.990, aprovechá",2025-06-06T17:22:00-03:00
+samples-demo-07,user,dale la quiero a 45.990 entonces,2025-06-06T17:24:00-03:00
+samples-demo-07,assistant,"Perfecto, te la reservo a ese precio",2025-06-06T17:29:00-03:00
+samples-demo-07,user,me pasás el link de pago a 45.990?,2025-06-06T17:31:00-03:00
+samples-demo-07,assistant,Sí ahora te lo armo a $45.990 👌,2025-06-06T17:36:00-03:00
+samples-demo-08,user,"hola quería el reintegro del SHORT TOKIO BLACK, ya devolví la prenda",2025-06-10T12:00:00-03:00
+samples-demo-08,assistant,"Hola! Listo, te transferimos los $66.990 más $5.000 de cortesía por la demora 🙌",2025-06-10T12:05:00-03:00
+samples-demo-08,user,"ah gracias, a qué cuenta me lo mandan?",2025-06-10T12:07:00-03:00
+samples-demo-08,assistant,Pasame tu alias,2025-06-10T12:12:00-03:00
+samples-demo-08,user,jose.crespo,2025-06-10T12:14:00-03:00
+samples-demo-08,assistant,"Listo, transferido. Te llegó?",2025-06-10T12:19:00-03:00
+samples-demo-08,user,no me llegó nada,2025-06-10T12:21:00-03:00
+samples-demo-08,assistant,"Fijate que lo mandamos al alias samples.mp, revisá ahí",2025-06-10T12:26:00-03:00
+samples-demo-08,user,"ese es el alias de ustedes, no el mío",2025-06-10T12:28:00-03:00
+samples-demo-08,assistant,"Cierto, ya sale de nuevo, en 72hs lo tenés seguro",2025-06-10T12:33:00-03:00
+samples-demo-09,user,"mido 1.85 y peso 90kg, qué talle de hoodie me va?",2025-06-14T19:25:00-03:00
+samples-demo-09,assistant,"Hola! Con esa contextura un talle S te va perfecto, nuestros talles son grandes 👌",2025-06-14T19:30:00-03:00
+samples-demo-09,user,S? no me parece muy chico?,2025-06-14T19:32:00-03:00
+samples-demo-09,assistant,"Para nada, nuestro S equivale a un XL de otras marcas, está hecho oversize",2025-06-14T19:37:00-03:00
+samples-demo-09,user,"mmm no sé, no prefiero un L?",2025-06-14T19:39:00-03:00
+samples-demo-09,assistant,"No, el L te va a quedar enorme, hacelo caso, pedí el S",2025-06-14T19:44:00-03:00
+samples-demo-09,user,"bueno confío, pido el S",2025-06-14T19:46:00-03:00
+samples-demo-09,assistant,Vas a ver que te queda joya 😉,2025-06-14T19:51:00-03:00
+samples-demo-10,user,hola es verdad que tienen 3x2?,2025-06-18T13:45:00-03:00
+samples-demo-10,assistant,"Hola! Sí 😍 este finde tenemos 3x2 en toda la web, llevás 3 prendas y pagás 2",2025-06-18T13:50:00-03:00
+samples-demo-10,user,en serio en todo? hoodies también?,2025-06-18T13:52:00-03:00
+samples-demo-10,assistant,"Sí sí, en todo el catálogo incluido hoodies y baggies, hasta el domingo",2025-06-18T13:57:00-03:00
+samples-demo-10,user,"perfecto armo el carrito, cómo aplico el 3x2?",2025-06-18T13:59:00-03:00
+samples-demo-10,assistant,Se aplica solo en el carrito automáticamente,2025-06-18T14:04:00-03:00
+samples-demo-10,user,"no se me aplica nada, sigo pagando las 3",2025-06-18T14:06:00-03:00
+samples-demo-10,assistant,"Raro, debe ser que se cae el sistema por la demanda. Igual armá el pedido y te ajustamos el total a mano antes de cobrarte 🙌",2025-06-18T14:11:00-03:00
+samples-demo-10,user,dale espero el ajuste entonces,2025-06-18T14:13:00-03:00
