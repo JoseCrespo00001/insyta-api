@@ -60,6 +60,7 @@ class ConversationsPage(BaseModel):
 class MessageOut(BaseModel):
     public_id: str
     role: str
+    content: str
     content_anonymized: str | None
     timestamp: str
 
@@ -246,6 +247,7 @@ async def get_conversation_detail(
             MessageOut(
                 public_id=m.public_id,
                 role=m.role,
+                content=m.content_anonymized or m.content,
                 content_anonymized=m.content_anonymized,
                 timestamp=m.timestamp.isoformat(),
             )
