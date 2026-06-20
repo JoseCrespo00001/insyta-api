@@ -44,6 +44,12 @@ class ConversationSummary(BaseModel):
     status: str
     started_at: str | None
     score: int | None
+    contact_name: str | None = None
+    preview: str | None = None
+    message_count: int = 0
+    upload_group_id: str | None = None
+    satisfaction: str | None = None
+    resolved: bool | None = None
 
 
 class ConversationsPage(BaseModel):
@@ -155,7 +161,13 @@ async def list_project_conversations(
             Conversation.platform,
             Conversation.status,
             Conversation.started_at,
+            Conversation.contact_name,
+            Conversation.preview,
+            Conversation.message_count,
+            Conversation.upload_id,
             Evaluation.score,
+            Evaluation.satisfaction,
+            Evaluation.resolution,
         )
         .outerjoin(Evaluation, Evaluation.conversation_id == Conversation.id)
         .where(Conversation.project_id == project_id)
@@ -170,6 +182,11 @@ async def list_project_conversations(
     has_more = len(rows) > limit
     page_rows = rows[:limit]
 
+    def _sat(v: int | None) -> str | None:
+        if v is None:
+            return None
+        return "satisfecho" if v >= 4 else "neutral" if v == 3 else "insatisfecho"
+
     items = [
         ConversationSummary(
             public_id=r.public_id,
@@ -178,6 +195,12 @@ async def list_project_conversations(
             status=r.status,
             started_at=r.started_at.isoformat() if r.started_at else None,
             score=r.score,
+            contact_name=r.contact_name,
+            preview=r.preview,
+            message_count=r.message_count or 0,
+            upload_group_id=str(r.upload_id) if r.upload_id else None,
+            satisfaction=_sat(r.satisfaction),
+            resolved=r.resolution,
         )
         for r in page_rows
     ]
