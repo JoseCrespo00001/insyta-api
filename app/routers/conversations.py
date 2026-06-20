@@ -21,7 +21,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
-from app.models import Conversation, Evaluation, Message, Project
+from app.models import Conversation, Evaluation, Message, Project, Upload
 from app.services.report_format import eval_to_camel
 
 logger = logging.getLogger(__name__)
@@ -192,6 +192,107 @@ async def list_project_conversations(
     next_cursor = _encode_cursor(page_rows[-1].id) if has_more and page_rows else None
 
     return ConversationsPage(items=items, next_cursor=next_cursor)
+
+
+class GlobalGroupConv(BaseModel):
+    public_id: str
+    external_id: str
+    contact_name: str | None = None
+    preview: str | None = None
+    message_count: int = 0
+    score: int | None = None
+    satisfaction: str | None = None
+    resolved: bool | None = None
+
+
+class GlobalUploadGroup(BaseModel):
+    id: str
+    project_name: str
+    filename: str
+    loaded_at: str
+    conversations: list[GlobalGroupConv]
+
+
+def _sat_bucket(v: int | None) -> str | None:
+    if v is None:
+        return None
+    return "satisfecho" if v >= 4 else "neutral" if v == 3 else "insatisfecho"
+
+
+@router.get("/conversations", response_model=list[GlobalUploadGroup])
+async def list_all_conversations(
+    session: AsyncSession = Depends(get_db_with_tenant_context),
+) -> list[GlobalUploadGroup]:
+    """Conversaciones de todo el tenant agrupadas por CSV (upload) y proyecto.
+
+    Lo usa la vista global /conversations. RLS filtra por org/proyectos visibles.
+    """
+    upload_rows = (
+        await session.execute(
+            select(
+                Upload.id,
+                Upload.public_id,
+                Upload.filename,
+                Upload.created_at,
+                Project.name,
+            )
+            .join(Project, Project.id == Upload.project_id)
+            .order_by(Upload.created_at.desc())
+        )
+    ).all()
+    if not upload_rows:
+        return []
+
+    upload_ids = [r.id for r in upload_rows]
+    conv_rows = (
+        await session.execute(
+            select(
+                Conversation.upload_id,
+                Conversation.public_id,
+                Conversation.external_id,
+                Conversation.contact_name,
+                Conversation.preview,
+                Conversation.message_count,
+                Evaluation.score,
+                Evaluation.satisfaction,
+                Evaluation.resolution,
+            )
+            .outerjoin(Evaluation, Evaluation.conversation_id == Conversation.id)
+            .where(Conversation.upload_id.in_(upload_ids))
+            .order_by(Conversation.id.desc())
+        )
+    ).all()
+
+    convs_by_upload: dict = {}
+    for r in conv_rows:
+        convs_by_upload.setdefault(r.upload_id, []).append(
+            GlobalGroupConv(
+                public_id=r.public_id,
+                external_id=r.external_id,
+                contact_name=r.contact_name,
+                preview=r.preview,
+                message_count=r.message_count or 0,
+                score=r.score,
+                satisfaction=_sat_bucket(r.satisfaction),
+                resolved=r.resolution,
+            )
+        )
+
+    groups: list[GlobalUploadGroup] = []
+    for u in upload_rows:
+        convs = convs_by_upload.get(u.id, [])
+        if not convs:
+            continue
+        groups.append(
+            GlobalUploadGroup(
+                id=u.public_id,
+                project_name=u.name,
+                filename=u.filename or "carga.csv",
+                loaded_at=u.created_at.isoformat(),
+                conversations=convs,
+            )
+        )
+    return groups
 
 
 @router.get(
