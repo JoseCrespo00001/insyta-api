@@ -27,6 +27,7 @@ from app.models import (
     Project,
 )
 from app.services.celery_app import celery_app
+from app.services.report_format import eval_to_camel
 
 logger = logging.getLogger(__name__)
 
@@ -67,50 +68,6 @@ class AuditSummary(_Camel):
     free_text: str
     created_at: str
     status: str
-
-
-def _eval_dict(ev: Evaluation | None) -> dict:
-    """ConversationEvaluation (camelCase) que consume ReportView. Ceros si la
-    conversación todavía no tiene Evaluation (auditoría en curso)."""
-    if ev is None:
-        return {
-            "resolution": False,
-            "satisfaction": 0,
-            "tone": "neutral",
-            "frustration": False,
-            "escalated": False,
-            "efficiency": 0,
-            "scopeViolation": False,
-            "topic": "",
-            "summary": "",
-            "modelUsed": "",
-            "tokensInput": 0,
-            "tokensOutput": 0,
-            "costUsd": 0,
-            "latencyMs": 0,
-            "phoenixTraceId": "",
-            "phoenixSpanId": "",
-            "evaluatedAt": "",
-        }
-    return {
-        "resolution": bool(ev.resolution),
-        "satisfaction": ev.satisfaction or 0,
-        "tone": ev.tone or "neutral",
-        "frustration": bool(ev.frustration),
-        "escalated": bool(ev.escalated),
-        "efficiency": ev.efficiency or 0,
-        "scopeViolation": bool(ev.scope_violation),
-        "topic": ev.topic or "",
-        "summary": ev.summary or "",
-        "modelUsed": ev.model_used or "",
-        "tokensInput": ev.tokens_input or 0,
-        "tokensOutput": ev.tokens_output or 0,
-        "costUsd": float(ev.cost_usd) if ev.cost_usd is not None else 0,
-        "latencyMs": ev.latency_ms or 0,
-        "phoenixTraceId": ev.phoenix_trace_id or "",
-        "phoenixSpanId": ev.phoenix_span_id or "",
-        "evaluatedAt": ev.evaluated_at.isoformat() if ev.evaluated_at else "",
-    }
 
 
 async def _resolve_project(
@@ -331,7 +288,7 @@ async def get_audit(
             "messages": [],
             "selected": False,
             "pinned": False,
-            "evaluation": _eval_dict(ev),
+            "evaluation": eval_to_camel(ev),
         }
         conversations.append(item)
         if ev is not None and ev.resolution is False:

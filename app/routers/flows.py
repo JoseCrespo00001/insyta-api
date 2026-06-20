@@ -101,6 +101,18 @@ def _to_summary(flow: Flow) -> FlowSummary:
     )
 
 
+@router.get("/flows", response_model=list[FlowSummary])
+async def list_all_flows(
+    session: AsyncSession = Depends(get_db_with_tenant_context),
+) -> list[FlowSummary]:
+    """Todos los flujos visibles para el tenant (RLS filtra por org/proyectos).
+
+    Lo usa la vista global de Mejoras para elegir un flujo sin entrar al proyecto.
+    """
+    result = await session.execute(select(Flow).order_by(Flow.created_at.desc()))
+    return [_to_summary(f) for f in result.scalars()]
+
+
 @router.get("/projects/{project_public_id}/flows", response_model=list[FlowSummary])
 async def list_flows(
     project_public_id: str,
