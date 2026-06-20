@@ -20,7 +20,6 @@ from typing import Any, Protocol
 
 from pydantic import ValidationError
 
-from app.core.config import get_settings
 from app.llm.prompts.eval_v1 import (
     PROMPT_VERSION,
     SYSTEM_PROMPT_V1,
@@ -81,10 +80,12 @@ class AnthropicProvider:
         if self._client is None:
             from anthropic import AsyncAnthropic
 
-            settings = get_settings()
-            if not settings.anthropic_api_key:
+            from app.llm.credentials import get_anthropic_key
+
+            key = get_anthropic_key()
+            if not key:
                 raise FatalLLMError("ANTHROPIC_API_KEY not set")
-            self._client = AsyncAnthropic(api_key=settings.anthropic_api_key)
+            self._client = AsyncAnthropic(api_key=key)
         return self._client
 
     async def evaluate(
@@ -167,10 +168,12 @@ class OpenAIProvider:
         if self._client is None:
             from openai import AsyncOpenAI
 
-            settings = get_settings()
-            if not settings.openai_api_key:
+            from app.llm.credentials import get_openai_key
+
+            key = get_openai_key()
+            if not key:
                 raise FatalLLMError("OPENAI_API_KEY not set")
-            self._client = AsyncOpenAI(api_key=settings.openai_api_key)
+            self._client = AsyncOpenAI(api_key=key)
         return self._client
 
     async def evaluate(

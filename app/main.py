@@ -17,6 +17,9 @@ from app.routers import (
     projects,
     uploads,
 )
+from app.routers import (
+    settings as settings_router,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +72,7 @@ def create_app() -> FastAPI:
     app.include_router(audits.router)
     app.include_router(improvements.router)
     app.include_router(dashboard.router)
+    app.include_router(settings_router.router)
 
     return app
 

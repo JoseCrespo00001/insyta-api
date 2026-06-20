@@ -14,7 +14,6 @@ from typing import Literal
 
 from pydantic import BaseModel, ValidationError
 
-from app.core.config import get_settings
 from app.llm.router import FatalLLMError, TransientLLMError
 
 logger = logging.getLogger(__name__)
@@ -76,10 +75,12 @@ def _parse(text: str) -> list[MessageVerdict]:
 async def _anthropic(user_prompt: str) -> str:
     from anthropic import APIError, AsyncAnthropic
 
-    settings = get_settings()
-    if not settings.anthropic_api_key:
+    from app.llm.credentials import get_anthropic_key
+
+    key = get_anthropic_key()
+    if not key:
         raise FatalLLMError("ANTHROPIC_API_KEY not set")
-    client = AsyncAnthropic(api_key=settings.anthropic_api_key)
+    client = AsyncAnthropic(api_key=key)
     try:
         resp = await client.messages.create(
             model="claude-haiku-4-5-20251001",
@@ -95,10 +96,12 @@ async def _anthropic(user_prompt: str) -> str:
 async def _openai(user_prompt: str) -> str:
     from openai import APIError, AsyncOpenAI
 
-    settings = get_settings()
-    if not settings.openai_api_key:
+    from app.llm.credentials import get_openai_key
+
+    key = get_openai_key()
+    if not key:
         raise FatalLLMError("OPENAI_API_KEY not set")
-    client = AsyncOpenAI(api_key=settings.openai_api_key)
+    client = AsyncOpenAI(api_key=key)
     try:
         resp = await client.chat.completions.create(
             model="gpt-4.1-mini",

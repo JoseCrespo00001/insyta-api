@@ -36,6 +36,7 @@ from app.models import (
     ImprovementConversation,
     Message,
     MessageEvaluation,
+    Organization,
 )
 from app.services.celery_app import celery_app
 
@@ -245,6 +246,17 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
         free_text = audit.free_text
         flow_id = audit.flow_id
         project_id = audit.project_id
+        # API key del proveedor cargada por el tenant desde el front (cifrada).
+        org = await session.get(Organization, org_id)
+        org_key_enc = org.anthropic_api_key_encrypted if org else None
+
+    if org_key_enc:
+        from app.llm.credentials import set_llm_keys
+        from app.services.secret_crypto import decrypt_secret
+
+        decrypted = decrypt_secret(org_key_enc)
+        if decrypted:
+            set_llm_keys(anthropic=decrypted)
 
     router = LLMRouter()
     issue_counter: Counter = Counter()
