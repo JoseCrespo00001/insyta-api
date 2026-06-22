@@ -15,9 +15,9 @@ import base64
 import logging
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
@@ -149,12 +149,13 @@ async def list_project_conversations(
             Conversation.contact_name,
             Conversation.preview,
             Conversation.message_count,
-            Conversation.upload_id,
+            Upload.public_id.label("upload_public_id"),
             Evaluation.score,
             Evaluation.satisfaction,
             Evaluation.resolution,
         )
         .outerjoin(Evaluation, Evaluation.conversation_id == Conversation.id)
+        .outerjoin(Upload, Upload.id == Conversation.upload_id)
         .where(Conversation.project_id == project_id)
         .order_by(Conversation.id.desc())
         .limit(limit + 1)
@@ -183,7 +184,7 @@ async def list_project_conversations(
             contact_name=r.contact_name,
             preview=r.preview,
             message_count=r.message_count or 0,
-            upload_group_id=str(r.upload_id) if r.upload_id else None,
+            upload_group_id=r.upload_public_id,
             satisfaction=_sat(r.satisfaction),
             resolved=r.resolution,
         )
@@ -340,3 +341,25 @@ async def get_conversation_detail(
         ],
         evaluation=eval_to_camel(evaluation) if evaluation else None,
     )
+
+
+@router.delete(
+    "/conversations/{conversation_public_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_conversation(
+    conversation_public_id: str,
+    session: AsyncSession = Depends(get_db_with_tenant_context),
+) -> None:
+    """Borra una conversación. Mensajes, evaluations y verdicts caen por FK CASCADE."""
+    conv_id = (
+        await session.execute(
+            select(Conversation.id).where(
+                Conversation.public_id == conversation_public_id
+            )
+        )
+    ).scalar_one_or_none()
+    if conv_id is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    await session.execute(delete(Conversation).where(Conversation.id == conv_id))
+    await session.commit()

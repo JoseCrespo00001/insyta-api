@@ -24,12 +24,12 @@ from fastapi import (
     status,
 )
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import CurrentUser, get_current_user
 from app.core.db import get_db_with_tenant_context
-from app.models import Agent, Project, Upload
+from app.models import Agent, Conversation, Project, Upload
 from app.services.celery_app import celery_app
 from app.services.uploads_storage import write_upload
 
@@ -248,3 +248,36 @@ async def get_upload(
         progress_pct=progress_pct,
         error_message=upload.error_message,
     )
+
+
+@router.delete(
+    "/uploads/{upload_public_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_upload(
+    upload_public_id: str,
+    session: AsyncSession = Depends(get_db_with_tenant_context),
+) -> None:
+    """Borra un CSV completo: sus conversaciones (cascada de mensajes/evals) +
+    la fila del upload + el archivo en disco."""
+    row = (
+        await session.execute(
+            select(Upload.id, Upload.storage_path).where(
+                Upload.public_id == upload_public_id
+            )
+        )
+    ).one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Upload not found")
+
+    await session.execute(delete(Conversation).where(Conversation.upload_id == row.id))
+    await session.execute(delete(Upload).where(Upload.id == row.id))
+    await session.commit()
+
+    # Mejor esfuerzo: borrar el archivo del storage.
+    if row.storage_path:
+        import contextlib
+        import os
+
+        with contextlib.suppress(OSError):
+            os.remove(row.storage_path)
