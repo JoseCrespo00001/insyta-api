@@ -37,3 +37,4 @@ Thumbs.db
 local_data/
 .pgdata/
 .redisdata/
+app/llm/knowledge/langflow-docs-raw.md

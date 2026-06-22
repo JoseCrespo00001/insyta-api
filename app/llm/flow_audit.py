@@ -13,46 +13,33 @@ from __future__ import annotations
 
 import json
 import logging
+from pathlib import Path
 
 from app.llm.audit_judge import FatalLLMError, TransientLLMError
 
 logger = logging.getLogger(__name__)
 
-# Conocimiento de Langflow embebido en el prompt (componentes, agentes, tools,
-# ruteo, structured output, MCP, flows-as-tools, memoria, RAG, buenas prácticas).
-_LANGFLOW_SYSTEM = """\
-Sos un arquitecto experto en Langflow (la herramienta visual de orquestación de \
-agentes sobre LangChain) y en diseño de agentes conversacionales de producción. \
-Conocés a fondo las versiones recientes de Langflow y sus componentes:
+# Skill file editable con el conocimiento de Langflow. Se recarga en caliente.
+_KNOWLEDGE_PATH = Path(__file__).parent / "knowledge" / "langflow.md"
+_knowledge_cache: dict = {"mtime": None, "text": None}
 
-- Entrada/Salida: Chat Input, Chat Output, Text Input/Output.
-- Modelos: OpenAI, Anthropic, Groq, Google, modelos locales (Ollama).
-- Agent: el componente Agent moderno con tool-calling nativo, instrucciones \
-(system prompt), y conexión de Tools. Soporta múltiples herramientas.
-- Tools: Calculator, URL/Web Search, Python REPL, API Request, herramientas \
-custom, y "flows-as-tools" (un flujo puede exponerse como tool de un agente).
-- MCP: componentes MCP server/client para conectar herramientas externas por \
-protocolo MCP.
-- Ruteo/condiciones: Conditional Router (If-Else), Pass, Loop, Listen/Notify.
-- Prompts: Prompt template con variables; Structured Output para forzar JSON.
-- Memoria: Chat Memory / Message History para mantener contexto.
-- RAG: Vector Store (Astra, Chroma, pgvector), embeddings, retrievers, splitters.
-- Sub-flows y composición: un supervisor que rutea a agentes especializados.
+# Fallback mínimo si el skill file no existe.
+_KNOWLEDGE_FALLBACK = (
+    "Langflow es una herramienta visual para construir agentes sobre LangChain. "
+    "Evaluá: prompts monolíticos (dividir en agentes), agentes que prometen "
+    "acciones sin tools, falta de ruteo con múltiples intenciones, casos borde "
+    "(datos faltantes, fuera de scope, escalamiento), memoria multi-turno, nodos "
+    "sueltos, entrada/salida, structured output y grounding/RAG."
+)
 
-Principios de diseño que evaluás:
-1. Un prompt gigante que mezcla muchas responsabilidades es un anti-patrón: \
-conviene dividir en agentes especializados coordinados por un router/supervisor.
-2. Cada agente debería tener tools concretas para CUMPLIR la tarea (no solo \
-"responder"). Si un agente promete acciones (pagos, tracking, devoluciones) sin \
-una tool/API que las ejecute, falta esa herramienta.
-3. Tiene que haber ruteo claro cuando hay múltiples intenciones; si no, el \
-mensaje cae en el agente equivocado.
-4. Manejo de casos borde: pedir datos faltantes, fallback, escalar a humano, \
-mensajes fuera de scope, errores de tool.
-5. Memoria/contexto cuando la conversación es multi-turno.
-6. Nodos deben estar conectados (entrada → ... → salida); nodos sueltos no se \
-ejecutan.
-7. Structured output cuando otro paso consume el resultado.
+_ROLE = (
+    "Sos un arquitecto experto en Langflow y en diseño de agentes "
+    "conversacionales de producción. Usá el siguiente conocimiento de Langflow "
+    "para analizar el flujo:\n\n"
+)
+
+# El formato de salida vive en código (estable); el conocimiento, en el skill file.
+_OUTPUT_SCHEMA = """
 
 Te paso un RESUMEN del flujo (nodos con su tipo, nombre, prompt/instrucciones, \
 modelo y tools; más las conexiones). Analizalo y devolvé SOLO un JSON válido con \
@@ -74,7 +61,23 @@ esta forma exacta (sin texto extra, sin markdown):
 }
 
 Sé específico y accionable; nombrá nodos reales del flujo. No inventes \
-componentes que no existen en Langflow."""
+componentes que no existan en Langflow."""
+
+
+def load_knowledge() -> str:
+    """Lee el skill file de Langflow con cache por mtime (hot reload)."""
+    try:
+        st = _KNOWLEDGE_PATH.stat()
+    except OSError:
+        return _KNOWLEDGE_FALLBACK
+    if _knowledge_cache["mtime"] != st.st_mtime:
+        try:
+            _knowledge_cache["text"] = _KNOWLEDGE_PATH.read_text(encoding="utf-8")
+            _knowledge_cache["mtime"] = st.st_mtime
+        except OSError:
+            return _KNOWLEDGE_FALLBACK
+    return _knowledge_cache["text"] or _KNOWLEDGE_FALLBACK
+
 
 _DEEP_EXTRA = """\
 
@@ -169,14 +172,24 @@ async def audit_flow(flow_json: dict, *, mode: str = "standard") -> dict:
     if not key:
         raise FatalLLMError("ANTHROPIC_API_KEY not set")
 
-    system = _LANGFLOW_SYSTEM + (_DEEP_EXTRA if mode == "deep" else "")
+    # El conocimiento (skill file) va en un bloque con cache_control para abaratar
+    # auditorías repetidas; las instrucciones de formato/modo, en otro bloque.
+    knowledge_block = _ROLE + load_knowledge()
+    instructions = _OUTPUT_SCHEMA + (_DEEP_EXTRA if mode == "deep" else "")
     user = "Resumen del flujo a auditar:\n\n" + summarize_flow(flow_json)
     client = AsyncAnthropic(api_key=key)
     try:
         resp = await client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=4096 if mode == "deep" else 2048,
-            system=[{"type": "text", "text": system}],
+            system=[
+                {
+                    "type": "text",
+                    "text": knowledge_block,
+                    "cache_control": {"type": "ephemeral"},
+                },
+                {"type": "text", "text": instructions},
+            ],
             messages=[{"role": "user", "content": user}],
         )
     except APIError as exc:
