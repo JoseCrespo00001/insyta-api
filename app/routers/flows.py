@@ -16,8 +16,9 @@ from pydantic.alias_generators import to_camel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.auth import CurrentUser, get_current_user
 from app.core.db import get_db_with_tenant_context
-from app.models import Flow, Project
+from app.models import Flow, Organization, Project
 
 logger = logging.getLogger(__name__)
 
@@ -235,3 +236,48 @@ async def delete_flow(
         raise HTTPException(status_code=404, detail="Flow not found")
     await session.delete(flow)
     await session.flush()
+
+
+class FlowAuditRequest(BaseModel):
+    mode: str = "standard"  # "standard" | "deep" (Plus)
+
+
+@router.post("/flows/{flow_public_id}/audit", response_model=dict)
+async def audit_flow_endpoint(
+    flow_public_id: str,
+    payload: FlowAuditRequest,
+    current_user: CurrentUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_with_tenant_context),
+) -> dict:
+    """Audita el flujo en sí (sin conversaciones) con un LLM experto en Langflow.
+
+    Devuelve {completeness, summary, suggestions[]}. Usa la API key del tenant.
+    """
+    flow = (
+        await session.execute(select(Flow).where(Flow.public_id == flow_public_id))
+    ).scalar_one_or_none()
+    if flow is None:
+        raise HTTPException(status_code=404, detail="Flow not found")
+
+    # Cargar y aplicar la API key del tenant (cifrada).
+    org = await session.get(Organization, current_user.org_id)
+    enc = org.anthropic_api_key_encrypted if org else None
+    if enc:
+        from app.llm.credentials import set_llm_keys
+        from app.services.secret_crypto import decrypt_secret
+
+        decrypted = decrypt_secret(enc)
+        if decrypted:
+            set_llm_keys(anthropic=decrypted)
+
+    from app.llm.audit_judge import FatalLLMError
+    from app.llm.flow_audit import audit_flow
+
+    mode = "deep" if payload.mode == "deep" else "standard"
+    try:
+        return await audit_flow(flow.flow_json or {}, mode=mode)
+    except FatalLLMError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Falta la API key de Anthropic. Cargala en Perfil → Extensiones.",
+        ) from exc
