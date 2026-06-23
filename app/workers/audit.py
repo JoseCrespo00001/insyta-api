@@ -26,8 +26,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import engine, tenant_txn
 from app.llm.audit_judge import judge_messages
-from app.llm.router import FatalLLMError, LLMRouter
 from app.llm.flow_audit import summarize_flow
+from app.llm.router import FatalLLMError, LLMRouter
 from app.models import (
     Audit,
     AuditConversation,
@@ -41,6 +41,11 @@ from app.models import (
     Organization,
     Project,
 )
+from app.services.celery_app import celery_app
+
+logger = logging.getLogger(__name__)
+
+_SATISFACTION_BUCKETS = {5: "satisfecho", 4: "satisfecho", 3: "neutral"}
 
 # Objetivos de campaña (estilo Meta) → descripción que entiende el judge.
 OBJECTIVE_LABELS = {
@@ -50,11 +55,6 @@ OBJECTIVE_LABELS = {
     "soporte": "Resolver soporte / atención al cliente",
     "agendar": "Agendar / reservar (turno, demo, llamada)",
 }
-from app.services.celery_app import celery_app
-
-logger = logging.getLogger(__name__)
-
-_SATISFACTION_BUCKETS = {5: "satisfecho", 4: "satisfecho", 3: "neutral"}
 
 
 async def _load_audit_conversations(

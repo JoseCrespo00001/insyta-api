@@ -134,7 +134,7 @@ async def update_project(
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
     data = payload.model_dump(exclude_unset=True)
-    if "name" in data and data["name"]:
+    if data.get("name"):
         project.name = data["name"]
     if "description" in data:
         project.description = data["description"]
