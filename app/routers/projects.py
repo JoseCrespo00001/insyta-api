@@ -13,6 +13,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
+from pydantic.alias_generators import to_camel
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -60,8 +61,19 @@ class ProjectListItem(BaseModel):
     conversation_count: int = Field(serialization_alias="conversationCount")
     score: int | None
     updated_at: str = Field(serialization_alias="updatedAt")
+    company_context: str | None = Field(
+        default=None, serialization_alias="companyContext"
+    )
 
     model_config = ConfigDict(populate_by_name=True)
+
+
+class ProjectUpdate(BaseModel):
+    name: str | None = Field(default=None, max_length=200)
+    description: str | None = Field(default=None, max_length=2000)
+    company_context: str | None = Field(default=None, max_length=8000)
+
+    model_config = ConfigDict(populate_by_name=True, alias_generator=to_camel)
 
 
 @router.get("/projects", response_model=list[ProjectListItem])
@@ -102,9 +114,42 @@ async def list_projects(
                 conversation_count=int(conv_count or 0),
                 score=round(avg) if avg is not None else None,
                 updated_at=p.updated_at.isoformat(),
+                company_context=p.company_context,
             )
         )
     return out
+
+
+@router.patch("/projects/{project_public_id}", response_model=ProjectListItem)
+async def update_project(
+    project_public_id: str,
+    payload: ProjectUpdate,
+    session: AsyncSession = Depends(get_db_with_tenant_context),
+) -> ProjectListItem:
+    project = (
+        await session.execute(
+            select(Project).where(Project.public_id == project_public_id)
+        )
+    ).scalar_one_or_none()
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    data = payload.model_dump(exclude_unset=True)
+    if "name" in data and data["name"]:
+        project.name = data["name"]
+    if "description" in data:
+        project.description = data["description"]
+    if "company_context" in data:
+        project.company_context = data["company_context"]
+    await session.flush()
+    return ProjectListItem(
+        public_id=project.public_id,
+        name=project.name,
+        agent_count=0,
+        conversation_count=0,
+        score=None,
+        updated_at=project.updated_at.isoformat(),
+        company_context=project.company_context,
+    )
 
 
 @router.post(

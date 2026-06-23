@@ -42,8 +42,12 @@ Para cada conversacion, devolve un objeto JSON con estos campos exactos:
 2. Todas las claves arriba son OBLIGATORIAS. Sin extras.
 3. Si una dimension no se puede determinar con evidencia clara, usa el valor
    neutro: score=50, satisfaction=3, tone="neutral", efficiency=3, etc.
-4. PII ya viene anonimizada con tokens [PHONE_xxx], [EMAIL_xxx], [NAME_xxx].
-   Tratalos como datos opacos; NO los menciones en el summary.
+4. Si el mensaje incluye un bloque CONTEXTO (objetivo de la campana, datos de
+   la empresa, flujo esperado), el `score` y `resolution` deben medir QUE TAN
+   BIEN la conversacion cumple ESE objetivo y sigue ESE flujo, no solo la
+   cortesia. Penaliza objetivos no cumplidos y desvios del flujo; premia cuando
+   el bot logra el objetivo del negocio (ej: si el objetivo es recaudar datos,
+   evalua si pidio y obtuvo los datos; si es vender, si avanzo la venta).
 
 # Ejemplo de output valido
 
@@ -62,12 +66,25 @@ Para cada conversacion, devolve un objeto JSON con estos campos exactos:
 """
 
 
-def build_user_prompt(messages: list[dict[str, str]]) -> str:
+def build_user_prompt(
+    messages: list[dict[str, str]], context: str | None = None
+) -> str:
     """Format the message list into the per-conversation user message.
 
-    Each message is a dict with `role` ("user"|"assistant") and `content`.
+    `context` (opcional) describe objetivo de campana + datos de empresa +
+    flujo esperado; el evaluador puntua segun el cumplimiento de eso.
     """
-    lines: list[str] = ["Evalua esta conversacion:\n"]
+    lines: list[str] = []
+    if context and context.strip():
+        lines.append("CONTEXTO (juzga el cumplimiento de esto):")
+        lines.append(context.strip())
+        lines.append("\n---")
+        lines.append(
+            "Evalua esta conversacion; el score debe reflejar si CUMPLE el "
+            "objetivo y sigue el FLUJO ESPERADO de arriba:\n"
+        )
+    else:
+        lines.append("Evalua esta conversacion:\n")
     for msg in messages:
         role = "Usuario" if msg.get("role") == "user" else "Bot"
         content = msg.get("content_anonymized") or msg.get("content") or ""

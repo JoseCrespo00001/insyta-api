@@ -27,17 +27,29 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.db import engine, tenant_txn
 from app.llm.audit_judge import judge_messages
 from app.llm.router import FatalLLMError, LLMRouter
+from app.llm.flow_audit import summarize_flow
 from app.models import (
     Audit,
     AuditConversation,
     Conversation,
     Evaluation,
+    Flow,
     Improvement,
     ImprovementConversation,
     Message,
     MessageEvaluation,
     Organization,
+    Project,
 )
+
+# Objetivos de campaña (estilo Meta) → descripción que entiende el judge.
+OBJECTIVE_LABELS = {
+    "leads": "Recaudar datos / generar leads (pedir y captar nombre, contacto, email/teléfono)",
+    "ventas": "Vender / cerrar la conversión (avanzar la compra)",
+    "awareness": "Que conozcan la marca / reconocimiento",
+    "soporte": "Resolver soporte / atención al cliente",
+    "agendar": "Agendar / reservar (turno, demo, llamada)",
+}
 from app.services.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -246,9 +258,30 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
         free_text = audit.free_text
         flow_id = audit.flow_id
         project_id = audit.project_id
+        objective = audit.objective
         # API key del proveedor cargada por el tenant desde el front (cifrada).
         org = await session.get(Organization, org_id)
         org_key_enc = org.anthropic_api_key_encrypted if org else None
+        # Contexto para el judge: objetivo de campaña + datos de empresa + flujo.
+        project = await session.get(Project, project_id)
+        company_context = project.company_context if project else None
+        flow_summary = None
+        if flow_id is not None:
+            flow = await session.get(Flow, flow_id)
+            if flow is not None and flow.flow_json:
+                flow_summary = summarize_flow(flow.flow_json)[:2500]
+
+    objective_label = OBJECTIVE_LABELS.get(objective or "", objective)
+    ctx_parts: list[str] = []
+    if objective_label:
+        ctx_parts.append(f"OBJETIVO DE LA CAMPAÑA: {objective_label}")
+    if company_context:
+        ctx_parts.append(f"DATOS DE LA EMPRESA:\n{company_context}")
+    if flow_summary:
+        ctx_parts.append(
+            f"FLUJO ESPERADO (lo que el agente debería hacer):\n{flow_summary}"
+        )
+    eval_context = "\n\n".join(ctx_parts) or None
 
     if org_key_enc:
         from app.llm.credentials import set_llm_keys
@@ -284,14 +317,26 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
                             "content_anonymized": m["content_anonymized"],
                         }
                         for m in msgs
-                    ]
+                    ],
+                    context=eval_context,
                 )
                 await _persist_conversation_eval(session, conv, parsed, usage)
                 evaluated += 1
 
-            # 2. Per-message verdicts.
+            # 2. Per-message verdicts (con objetivo + empresa + flujo).
             verdicts = await judge_messages(
-                msgs, emphasis=emphasis, free_text=free_text
+                msgs,
+                emphasis=emphasis,
+                free_text=free_text,
+                objective=objective_label,
+                flow_context="\n\n".join(
+                    p
+                    for p in (
+                        f"Empresa: {company_context}" if company_context else "",
+                        f"Flujo esperado:\n{flow_summary}" if flow_summary else "",
+                    )
+                    if p
+                ),
             )
             for v in verdicts:
                 if v.issue_type:

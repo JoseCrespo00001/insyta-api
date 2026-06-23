@@ -71,6 +71,8 @@ class Project(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     environment: Mapped[str] = mapped_column(String(8), nullable=False, default="live")
     retention_days: Mapped[int] = mapped_column(Integer, nullable=False, default=30)
     alert_thresholds: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # Datos de la empresa (contexto del negocio) que el judge usa al auditar.
+    company_context: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     __table_args__ = (
         UniqueConstraint("org_id", "slug", name="uq_projects_org_id_slug"),

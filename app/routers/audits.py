@@ -42,6 +42,7 @@ class _Camel(BaseModel):
 
 class AuditPayload(_Camel):
     name: str | None = None
+    objective: str | None = None  # leads | ventas | awareness | soporte | agendar
     flujo_id: str | None = None
     conversation_ids: list[str] = []
     emphasis: list[str] = []
@@ -131,6 +132,7 @@ async def create_audit(
         org_id=org_id,
         flow_id=flow_id,
         name=(payload.name or "").strip() or f"Auditoría — {flow_name or 'flujo'}",
+        objective=(payload.objective or None),
         emphasis=payload.emphasis,
         free_text=payload.free_text,
         status="running",
@@ -189,6 +191,7 @@ async def list_audits(
             {
                 "id": audit.public_id,
                 "name": audit.name,
+                "objective": audit.objective,
                 "flujoId": flow_public_id,
                 "flujoName": flow_name,
                 "conversationCount": audit.conversation_count,
@@ -298,6 +301,7 @@ async def get_audit(
     return {
         "id": audit.public_id,
         "name": audit.name,
+        "objective": audit.objective,
         "flujoId": flow_public_id,
         "flujoName": flow_name,
         "conversationCount": audit.conversation_count,

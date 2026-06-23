@@ -45,13 +45,25 @@ class _JudgeResponse(BaseModel):
 
 
 def _build_user_prompt(
-    messages: list[dict], emphasis: list[str] | None, free_text: str | None
+    messages: list[dict],
+    emphasis: list[str] | None,
+    free_text: str | None,
+    objective: str | None = None,
+    flow_context: str | None = None,
 ) -> str:
     lines = []
+    if objective:
+        lines.append(f"Objetivo de la campaña: {objective}")
+    if flow_context:
+        lines.append(f"Contexto (empresa + flujo esperado):\n{flow_context}")
     if emphasis:
         lines.append(f"Énfasis: {', '.join(emphasis)}")
     if free_text:
         lines.append(f"Instrucción del auditor: {free_text}")
+    lines.append(
+        "Juzgá cada mensaje del asistente según si AYUDA a cumplir el objetivo y "
+        "sigue el flujo/empresa; marcá error/warning cuando se desvía."
+    )
     lines.append("Conversación:")
     for m in messages:
         content = m.get("content_anonymized") or m.get("content") or ""
@@ -122,9 +134,13 @@ async def judge_messages(
     *,
     emphasis: list[str] | None = None,
     free_text: str | None = None,
+    objective: str | None = None,
+    flow_context: str | None = None,
 ) -> list[MessageVerdict]:
     """Return per-message verdicts. Tries Anthropic, falls back to OpenAI."""
-    user_prompt = _build_user_prompt(messages, emphasis, free_text)
+    user_prompt = _build_user_prompt(
+        messages, emphasis, free_text, objective, flow_context
+    )
     try:
         text = await _anthropic(user_prompt)
     except TransientLLMError:

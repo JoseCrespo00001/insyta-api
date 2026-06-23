@@ -62,7 +62,7 @@ class LLMProvider(Protocol):
     name: str
 
     async def evaluate(
-        self, messages: list[dict[str, str]]
+        self, messages: list[dict[str, str]], context: str | None = None
     ) -> tuple[EvaluationResponse, LLMUsage]: ...
 
 
@@ -89,12 +89,12 @@ class AnthropicProvider:
         return self._client
 
     async def evaluate(
-        self, messages: list[dict[str, str]]
+        self, messages: list[dict[str, str]], context: str | None = None
     ) -> tuple[EvaluationResponse, LLMUsage]:
         client = self._get_client()
         from anthropic import APIError, APIStatusError, RateLimitError
 
-        user_prompt = build_user_prompt(messages)
+        user_prompt = build_user_prompt(messages, context)
         with llm_span(self.name, self.model) as span:
             started = time.monotonic()
             try:
@@ -177,12 +177,12 @@ class OpenAIProvider:
         return self._client
 
     async def evaluate(
-        self, messages: list[dict[str, str]]
+        self, messages: list[dict[str, str]], context: str | None = None
     ) -> tuple[EvaluationResponse, LLMUsage]:
         client = self._get_client()
         from openai import APIError, APIStatusError, RateLimitError
 
-        user_prompt = build_user_prompt(messages)
+        user_prompt = build_user_prompt(messages, context)
         with llm_span(self.name, self.model) as span:
             started = time.monotonic()
             try:
@@ -295,10 +295,10 @@ class LLMRouter:
         self.prompt_version = PROMPT_VERSION
 
     async def evaluate(
-        self, messages: list[dict[str, str]]
+        self, messages: list[dict[str, str]], context: str | None = None
     ) -> tuple[EvaluationResponse, LLMUsage]:
         try:
-            return await self.primary.evaluate(messages)
+            return await self.primary.evaluate(messages, context)
         except TransientLLMError as exc:
             logger.warning(
                 "[LLM_ROUTER] %s failed, falling back to %s: %s",
@@ -306,4 +306,4 @@ class LLMRouter:
                 self.fallback.name,
                 exc,
             )
-            return await self.fallback.evaluate(messages)
+            return await self.fallback.evaluate(messages, context)
