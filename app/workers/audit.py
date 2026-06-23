@@ -54,6 +54,12 @@ OBJECTIVE_LABELS = {
     "awareness": "Que conozcan la marca / reconocimiento",
     "soporte": "Resolver soporte / atención al cliente",
     "agendar": "Agendar / reservar (turno, demo, llamada)",
+    "todos": (
+        "Evaluá la conversación contra TODOS los objetivos posibles "
+        "(recaudar datos/leads, vender, reconocimiento de marca, soporte y "
+        "agendar). El score debe reflejar el desempeño GENERAL across objetivos; "
+        "en el summary mencioná en cuáles cumplió y en cuáles no."
+    ),
 }
 
 
