@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import engine, tenant_txn
 from app.llm.audit_judge import judge_messages
-from app.llm.flow_audit import summarize_flow
+from app.llm.flow_audit import propose_flow_changes, summarize_flow
 from app.llm.router import FatalLLMError, build_router
 from app.models import (
     Audit,
@@ -304,6 +304,9 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
     issue_counter: Counter = Counter()
     evaluated = 0
     msg_evals = 0
+    # Punto #6: conversaciones que pidieron un camino no cubierto por el flujo.
+    unhandled: list[dict] = []
+    unhandled_seen: set = set()
 
     for conv_id in conv_ids:
         async with tenant_txn(org_id) as session:
@@ -351,6 +354,19 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
             for v in verdicts:
                 if v.issue_type:
                     issue_counter[v.issue_type] += 1
+                # Conversación que pidió algo fuera del flujo / no resuelto.
+                if (
+                    v.issue_type in ("alcance", "no_resuelve")
+                    and conv_id not in unhandled_seen
+                ):
+                    unhandled_seen.add(conv_id)
+                    unhandled.append(
+                        {
+                            "contact": conv.contact_name or conv.external_id,
+                            "preview": conv.preview or "",
+                            "note": v.note or v.issue_type,
+                        }
+                    )
             msg_evals += await _persist_message_evals(
                 session,
                 conv=conv,
@@ -360,6 +376,22 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
             )
 
     suggestions = _build_suggestions(issue_counter)
+    # Punto #6: a partir de las conversaciones no cubiertas, el experto en
+    # Langflow propone nodos/condiciones/agentes concretos para sumar al flujo.
+    if flow_id is not None and flow_summary and unhandled:
+        try:
+            structural = await propose_flow_changes(
+                flow_summary,
+                unhandled,
+                objective=objective_label,
+                company_context=company_context,
+                provider=provider,
+            )
+            # Estructurales primero (son las más accionables para el flujo).
+            suggestions = structural + suggestions
+        except Exception as exc:  # no romper la auditoría por las sugerencias
+            logger.warning("[AUDIT] propose_flow_changes falló: %s", exc)
+
     async with tenant_txn(org_id) as session:
         summary = await _compute_report_summary(session, conv_ids)
         await session.execute(

@@ -216,3 +216,121 @@ async def audit_flow(flow_json: dict, *, mode: str = "standard") -> dict:
         ],
         "mode": mode,
     }
+
+
+# ── Punto #6: proponer cambios al flujo para cubrir conversaciones no atendidas ─
+_PROPOSE_SCHEMA = """
+
+A partir del FLUJO ACTUAL (resumen abajo) y de CONVERSACIONES REALES que pidieron \
+algo que el flujo NO cubrió, proponé cambios CONCRETOS al flujo Langflow para \
+cubrir esos casos. Para cada cambio decí qué nodo agregar (Agent / Conditional \
+Router If-Else / Tool / etc.), a qué nodo conectarlo y por qué, citando la \
+conversación que lo motivó. Devolvé SOLO JSON válido:
+
+{
+  "suggestions": [
+    {
+      "type": "add_agent|add_condition|add_tool|other",
+      "title": "<qué nodo agregar, corto, español>",
+      "detail": "<cambio concreto en el JSON: qué nodo, dónde conectarlo, qué prompt/tool>",
+      "target": "<nodo del flujo cerca del cual va, o 'flujo'>",
+      "impact": "<a cuántas/qué conversaciones cubre>"
+    }
+  ]
+}
+
+No inventes componentes que no existan en Langflow. Si el flujo ya cubre todo, \
+devolvé suggestions vacío."""
+
+
+async def _complete(system: str, user: str, *, max_tokens: int, provider: str) -> str:
+    """Completion de texto con el motor elegido (anthropic | deepseek)."""
+    if provider == "deepseek":
+        from openai import APIError, AsyncOpenAI
+
+        from app.llm.credentials import (
+            DEEPSEEK_BASE_URL,
+            DEEPSEEK_MODEL,
+            get_deepseek_key,
+        )
+
+        key = get_deepseek_key()
+        if not key:
+            raise FatalLLMError("DEEPSEEK_API_KEY not set")
+        client = AsyncOpenAI(api_key=key, base_url=DEEPSEEK_BASE_URL)
+        try:
+            resp = await client.chat.completions.create(
+                model=DEEPSEEK_MODEL,
+                max_tokens=max_tokens,
+                temperature=0,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+            )
+        except APIError as exc:
+            raise TransientLLMError(f"deepseek propose error: {exc}") from exc
+        return resp.choices[0].message.content or ""
+
+    from anthropic import APIError, AsyncAnthropic
+
+    from app.llm.credentials import get_anthropic_key
+
+    key = get_anthropic_key()
+    if not key:
+        raise FatalLLMError("ANTHROPIC_API_KEY not set")
+    client = AsyncAnthropic(api_key=key)
+    try:
+        resp = await client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=max_tokens,
+            system=[{"type": "text", "text": system}],
+            messages=[{"role": "user", "content": user}],
+        )
+    except APIError as exc:
+        raise TransientLLMError(f"anthropic propose error: {exc}") from exc
+    return "".join(b.text for b in resp.content if getattr(b, "type", "") == "text")
+
+
+async def propose_flow_changes(
+    flow_summary: str,
+    unhandled: list[dict],
+    *,
+    objective: str | None = None,
+    company_context: str | None = None,
+    provider: str = "anthropic",
+) -> list[dict]:
+    """Sugerencias estructurales para cubrir conversaciones no atendidas por el
+    flujo. `unhandled` = [{contact, note, preview}]. Devuelve [{type,title,detail,
+    target,impact}]. No rompe: el caller debe capturar errores."""
+    if not unhandled:
+        return []
+    system = _ROLE + load_knowledge() + _PROPOSE_SCHEMA
+    lines = ["FLUJO ACTUAL (resumen):", flow_summary, ""]
+    if objective:
+        lines.append(f"OBJETIVO DE LA CAMPAÑA: {objective}")
+    if company_context:
+        lines.append(f"EMPRESA: {company_context[:800]}")
+    lines.append("\nCONVERSACIONES QUE PIDIERON UN CAMINO NO CUBIERTO:")
+    for i, u in enumerate(unhandled[:10], 1):
+        lines.append(
+            f"{i}. {u.get('contact') or 's/nombre'}: "
+            f"{u.get('preview') or ''} — problema: {u.get('note') or 'no cubierto'}"
+        )
+    text = await _complete(system, "\n".join(lines), max_tokens=2048, provider=provider)
+    parsed = _parse(text)
+    out = []
+    for s in parsed.get("suggestions") or []:
+        if isinstance(s, dict) and s.get("title"):
+            out.append(
+                {
+                    "type": str(s.get("type") or "other"),
+                    "title": str(s.get("title") or ""),
+                    "detail": str(s.get("detail") or ""),
+                    "target": str(s.get("target") or "flujo"),
+                    "impact": str(
+                        s.get("impact") or "cubre conversaciones no atendidas"
+                    ),
+                }
+            )
+    return out
