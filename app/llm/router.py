@@ -47,6 +47,12 @@ PRICING = {
         "cache_read": Decimal("0.10"),
         "output": Decimal("1.60"),
     },
+    "deepseek-chat": {
+        "input": Decimal("0.27"),
+        "cache_write": Decimal("0.27"),
+        "cache_read": Decimal("0.07"),
+        "output": Decimal("1.10"),
+    },
 }
 
 
@@ -234,6 +240,40 @@ class OpenAIProvider:
             model=self.model,
             latency_ms=latency_ms,
         )
+
+
+# ---------------------------------------------------------------------------
+# DeepSeek (OpenAI-compatible: mismo SDK, distinto base_url + key)
+# ---------------------------------------------------------------------------
+class DeepSeekProvider(OpenAIProvider):
+    name = "deepseek"
+    model = "deepseek-chat"
+
+    def _get_client(self):
+        if self._client is None:
+            from openai import AsyncOpenAI
+
+            from app.llm.credentials import (
+                DEEPSEEK_BASE_URL,
+                get_deepseek_key,
+            )
+
+            key = get_deepseek_key()
+            if not key:
+                raise FatalLLMError("DEEPSEEK_API_KEY not set")
+            self._client = AsyncOpenAI(api_key=key, base_url=DEEPSEEK_BASE_URL)
+        return self._client
+
+
+def build_router(provider: str | None = None) -> LLMRouter:
+    """Arma el router con el motor elegido como primario.
+
+    deepseek -> DeepSeek primario, Anthropic fallback.
+    default  -> Anthropic primario, OpenAI fallback.
+    """
+    if provider == "deepseek":
+        return LLMRouter(primary=DeepSeekProvider(), fallback=AnthropicProvider())
+    return LLMRouter()
 
 
 # ---------------------------------------------------------------------------

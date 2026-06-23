@@ -18,7 +18,7 @@ import asyncio
 import logging
 import uuid
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -27,7 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.db import engine, tenant_txn
 from app.llm.audit_judge import judge_messages
 from app.llm.flow_audit import summarize_flow
-from app.llm.router import FatalLLMError, LLMRouter
+from app.llm.router import FatalLLMError, build_router
 from app.models import (
     Audit,
     AuditConversation,
@@ -130,7 +130,7 @@ async def _persist_conversation_eval(
             cost_usd=usage.cost_usd,
             latency_ms=usage.latency_ms,
             phoenix_span_id=usage.phoenix_span_id,
-            evaluated_at=datetime.now(timezone.utc),
+            evaluated_at=datetime.now(UTC),
         )
         .on_conflict_do_nothing(index_elements=["conversation_id"])
     )
@@ -265,9 +265,11 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
         flow_id = audit.flow_id
         project_id = audit.project_id
         objective = audit.objective
-        # API key del proveedor cargada por el tenant desde el front (cifrada).
+        provider = audit.provider or "anthropic"
+        # API keys del tenant (cifradas) según el motor elegido.
         org = await session.get(Organization, org_id)
         org_key_enc = org.anthropic_api_key_encrypted if org else None
+        org_ds_enc = org.deepseek_api_key_encrypted if org else None
         # Contexto para el judge: objetivo de campaña + datos de empresa + flujo.
         project = await session.get(Project, project_id)
         company_context = project.company_context if project else None
@@ -289,15 +291,16 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
         )
     eval_context = "\n\n".join(ctx_parts) or None
 
-    if org_key_enc:
+    if org_key_enc or org_ds_enc:
         from app.llm.credentials import set_llm_keys
         from app.services.secret_crypto import decrypt_secret
 
-        decrypted = decrypt_secret(org_key_enc)
-        if decrypted:
-            set_llm_keys(anthropic=decrypted)
+        set_llm_keys(
+            anthropic=decrypt_secret(org_key_enc) if org_key_enc else None,
+            deepseek=decrypt_secret(org_ds_enc) if org_ds_enc else None,
+        )
 
-    router = LLMRouter()
+    router = build_router(provider)
     issue_counter: Counter = Counter()
     evaluated = 0
     msg_evals = 0
@@ -335,6 +338,7 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
                 emphasis=emphasis,
                 free_text=free_text,
                 objective=objective_label,
+                provider=provider,
                 flow_context="\n\n".join(
                     p
                     for p in (
@@ -366,7 +370,7 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
                 conversation_count=len(conv_ids),
                 suggestions=suggestions,
                 report_summary=summary,
-                finished_at=datetime.now(timezone.utc),
+                finished_at=datetime.now(UTC),
             )
         )
         # Turn each suggestion into a per-flow Improvement (pending) so the

@@ -51,6 +51,8 @@ class Audit(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     # Objetivo de la campaña (estilo Meta): leads | ventas | awareness | ...
     objective: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # Motor del judge: anthropic | deepseek
+    provider: Mapped[str | None] = mapped_column(String(16), nullable=True)
     emphasis: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     free_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="running")

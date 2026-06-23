@@ -41,8 +41,9 @@ class Organization(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     plan: Mapped[str] = mapped_column(String(32), nullable=False, default="free")
     white_label_config: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    # API key del proveedor LLM (Anthropic) cargada desde el front, cifrada (Fernet).
+    # API keys de proveedores LLM cargadas desde el front, cifradas (Fernet).
     anthropic_api_key_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    deepseek_api_key_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     __table_args__ = (
         CheckConstraint(

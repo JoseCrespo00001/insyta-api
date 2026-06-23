@@ -129,6 +129,34 @@ async def _openai(user_prompt: str) -> str:
     return resp.choices[0].message.content or ""
 
 
+async def _deepseek(user_prompt: str) -> str:
+    from openai import APIError, AsyncOpenAI
+
+    from app.llm.credentials import (
+        DEEPSEEK_BASE_URL,
+        DEEPSEEK_MODEL,
+        get_deepseek_key,
+    )
+
+    key = get_deepseek_key()
+    if not key:
+        raise FatalLLMError("DEEPSEEK_API_KEY not set")
+    client = AsyncOpenAI(api_key=key, base_url=DEEPSEEK_BASE_URL)
+    try:
+        resp = await client.chat.completions.create(
+            model=DEEPSEEK_MODEL,
+            temperature=0,
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+        )
+    except APIError as exc:
+        raise TransientLLMError(f"deepseek judge error: {exc}") from exc
+    return resp.choices[0].message.content or ""
+
+
 async def judge_messages(
     messages: list[dict],
     *,
@@ -136,16 +164,23 @@ async def judge_messages(
     free_text: str | None = None,
     objective: str | None = None,
     flow_context: str | None = None,
+    provider: str | None = None,
 ) -> list[MessageVerdict]:
-    """Return per-message verdicts. Tries Anthropic, falls back to OpenAI."""
+    """Veredictos por mensaje. Motor elegido (`provider`) con fallback."""
     user_prompt = _build_user_prompt(
         messages, emphasis, free_text, objective, flow_context
     )
-    try:
-        text = await _anthropic(user_prompt)
-    except TransientLLMError:
-        text = await _openai(user_prompt)
-    except FatalLLMError:
-        # No Anthropic key — try OpenAI; if that also lacks a key it raises.
-        text = await _openai(user_prompt)
+    # Orden de intento según el motor elegido.
+    chain = [_deepseek, _anthropic] if provider == "deepseek" else [_anthropic, _openai]
+    text = None
+    last_exc: Exception | None = None
+    for fn in chain:
+        try:
+            text = await fn(user_prompt)
+            break
+        except (TransientLLMError, FatalLLMError) as exc:
+            last_exc = exc
+            continue
+    if text is None:
+        raise last_exc or FatalLLMError("no judge provider available")
     return _parse(text)

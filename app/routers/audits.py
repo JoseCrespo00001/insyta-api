@@ -43,6 +43,7 @@ class _Camel(BaseModel):
 class AuditPayload(_Camel):
     name: str | None = None
     objective: str | None = None  # leads | ventas | awareness | soporte | agendar
+    provider: str | None = None  # anthropic | deepseek
     flujo_id: str | None = None
     conversation_ids: list[str] = []
     emphasis: list[str] = []
@@ -133,6 +134,7 @@ async def create_audit(
         flow_id=flow_id,
         name=(payload.name or "").strip() or f"Auditoría — {flow_name or 'flujo'}",
         objective=(payload.objective or None),
+        provider=(payload.provider or "anthropic"),
         emphasis=payload.emphasis,
         free_text=payload.free_text,
         status="running",
