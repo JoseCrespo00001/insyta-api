@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import engine, tenant_txn
 from app.models import Message, Upload
+from app.services.anonymizer import anonymize
 from app.services.celery_app import celery_app
 from app.services.idempotency import upsert_conversation_idempotent
 from app.workers.parsers import ConversationDTO, get_parser
@@ -88,6 +89,9 @@ async def _persist_messages(
 ) -> int:
     rows = []
     for seq, dto in enumerate(dtos):
+        # Anonimizar PII en la ingesta: el judge y todo downstream consumen
+        # content_anonymized (iron rule: PII nunca llega cruda al LLM).
+        anonymized = anonymize(dto.content or "").text
         rows.append(
             {
                 "id": uuid.uuid4(),
@@ -98,6 +102,7 @@ async def _persist_messages(
                 "seq": seq,
                 "role": dto.role,
                 "content": dto.content,
+                "content_anonymized": anonymized,
                 "timestamp": dto.timestamp,
             }
         )

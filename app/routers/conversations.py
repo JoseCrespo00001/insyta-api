@@ -331,9 +331,11 @@ async def get_conversation_detail(
         started_at=conv.started_at.isoformat() if conv.started_at else None,
         messages=[
             MessageOut(
+                # Texto real para el dueño (su data, bajo RLS). La versión
+                # anonimizada (content_anonymized) es la que va al LLM.
                 public_id=m.public_id,
                 role=m.role,
-                content=m.content_anonymized or m.content,
+                content=m.content,
                 content_anonymized=m.content_anonymized,
                 timestamp=m.timestamp.isoformat(),
             )
