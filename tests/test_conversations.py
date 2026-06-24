@@ -454,8 +454,12 @@ async def test_conversation_detail_returns_messages_and_evaluation():
             assert body["public_id"] == ids["conv_a_public"]
             assert len(body["messages"]) == 1
             assert body["messages"][0]["role"] == "user"
-            assert body["evaluation"]["score"] == 87
+            # NOTE 2026-06-24: eval_to_camel (per-conversación) NO emite `score`
+            # — el score es agregado (se expone a nivel proyecto/lista). Asertamos
+            # los campos que sí serializa el detalle.
             assert body["evaluation"]["tone"] == "positive"
+            assert body["evaluation"]["resolution"] is True
+            assert body["evaluation"]["satisfaction"] == 4
 
             r2 = await c.get(
                 f"/api/v1/projects/{ids['proj_a_public']}/score",

@@ -6,44 +6,78 @@ Scoped guide. Cross-cutting rules + domain glossary are in the repo root
 ## Stack
 
 FastAPI · SQLAlchemy 2.0 (async, asyncpg) · Alembic · Celery[redis] · Supabase/Postgres
-(RLS) · Pydantic v2 · Anthropic + OpenAI · Presidio (PII) · structlog · OpenTelemetry →
-Phoenix. Package manager: **uv** (`uv sync`, `uv run ...`). Python ≥3.11.
+(RLS) · Pydantic v2 · Anthropic + OpenAI + **DeepSeek** · Presidio (PII) · OpenTelemetry →
+Phoenix. Package manager: **uv** (`uv sync`, `uv run ...`). Python ≥3.11 (≥3.12 en prod).
+
+## Cómo arranca / URL
+
+- Local: `uv run uvicorn app.main:app --reload` → `http://127.0.0.1:8000`. Swagger en `/docs`,
+  ReDoc en `/redoc` (no están deshabilitados).
+- Docker: `uvicorn app.main:app --host 0.0.0.0 --port 8000` (`Dockerfile`).
+- `create_app()` (`app/main.py`) arma la app, monta CORS y registra los routers. El `lifespan`
+  valida que `jwt_secret` no sea débil fuera de `environment=development`.
 
 ## Layout (`app/`)
 
-- `routers/` — HTTP endpoints. Each maps to a BPMN task. Thin: validate → call service.
-- `services/` — business logic. `anonymizer.py` (PII), `webhook_secret.py` (Fernet).
-- `workers/` — Celery tasks: `evaluator.py` (LLM-as-judge), `processor.py`,
-  `webhook_processor.py`, `alerts.py`, `retention.py`, `scheduler.py` (Beat), `parsers/`.
-- `models/` — SQLAlchemy. `schemas/` — Pydantic I/O. `llm/` — provider clients.
-- `core/` — config, deps (incl. `get_db_with_tenant_context`). `webhooks/` — inbound.
-- `observability/` — Phoenix/OTel spans.
+- `routers/` — endpoints HTTP. Thin: validan → llaman service. Pydantic schemas **inline** en
+  cada router (con `alias_generator=to_camel`). Reales: `auth`, `me`, `health`, `projects`,
+  `conversations`, `uploads`, `flows`, `audits`, `improvements`, `dashboard`, `settings`.
+- `services/` — lógica de negocio: `anonymizer.py` (PII), `secret_crypto.py` (Fernet, deriva la
+  key del `jwt_secret`), `celery_app.py`, `idempotency.py`, `report_format.py`, `uploads_storage.py`.
+- `workers/` — Celery tasks: `processor.py` (parsea uploads → conversaciones/mensajes),
+  `audit.py` (`run_audit`: LLM-as-judge sobre las conversaciones de una auditoría),
+  `evaluator.py` (`evaluate_conversation`, eval por conversación), `parsers/` (WhatsApp/CSV/Respondio).
+- `models/` — SQLAlchemy ORM (`tenancy.py`, `audits.py`, `flows.py`, `uploads.py`,
+  `improvements.py`, `base.py` con mixins).
+- `llm/` — integración LLM: `router.py` (`build_router`/`LLMRouter`, Anthropic/OpenAI/DeepSeek
+  + retry), `audit_judge.py` (verdicts por mensaje), `flow_audit.py`, `credentials.py`
+  (ContextVar para keys per-tenant), `schemas.py`, `prompts/`, `knowledge/`.
+- `core/` — `config.py` (Settings Pydantic), `auth.py` (JWT/`get_current_user`),
+  `db.py` (engine async + `get_db_with_tenant_context` + `tenant_txn`).
+- `observability/` — spans Phoenix/OTel. `cli/` — comandos de utilidad.
+
+> **No hay `schemas/` ni `webhooks/`** como capas separadas: los schemas Pydantic viven inline en
+> los routers + `llm/schemas.py`, y no hay webhooks inbound implementados (ver "Estado actual").
+> (Las carpetas vacías de scaffolding `app/schemas/` y `app/webhooks/` se eliminaron en el audit 2026-06-24.)
+
+## Estado actual vs diseño diferido
+
+El sistema HOY es **CSV-driven**: el usuario sube un archivo (`uploads`) → `processor` crea
+conversaciones → el usuario dispara una **auditoría** (`audits`) → `run_audit` corre el judge y
+produce evaluaciones, evaluaciones por mensaje, sugerencias y mejoras. **No hay** ingestión por
+webhook, ni SSE/live-feed, ni alertas, ni retención, ni Celery Beat (`beat_schedule = {}` en
+`services/celery_app.py`).
+
+Los ADR 0001 (webhook granularity), 0003 (alert dedup), 0004 (SSE stateless) y 0005 (evaluator
+publishes feed) describen ese diseño **todavía no implementado**. Trátalos como decisiones de
+arquitectura futuras, no como código vivo. Si los implementás, seguí el ADR.
 
 ## Iron rules (API-specific)
 
-- **Every DB session goes through `get_db_with_tenant_context`** — it sets the
-  `app.current_org` / `app.allowed_projects` GUCs that RLS policies read. A raw session sees
-  zero rows. Never `SET LOCAL` by hand in a router.
-- **Anonymize before any LLM call.** `app.services.anonymizer` → reversible `[KIND_AABB]`
-  tokens. The 4-char suffix is deterministic (cache-hit friendly) — don't randomize it.
-- **Evaluator publish path** (ADR 0005): the 3-line block after `persist_evaluation` in
-  `workers/evaluator.py` publishes to the tenant SSE channel + enqueues alert checks. There
-  is NO Beat fanout task — don't reintroduce one.
-- **Routers stay thin.** No SQLAlchemy queries in routers; push to services.
-- **Pydantic v2 only** — `model_validate`, `model_dump`, `ConfigDict`. No v1 `.dict()`.
-- One **Evaluation** per Conversation (`UNIQUE(conversation_id)`). Respect idempotent upserts.
+- **Every DB session goes through `get_db_with_tenant_context`** — setea los GUCs
+  `app.current_org` / `app.allowed_projects` que leen las policies RLS (vía `set_config(...,true)`
+  con bound params). Una sesión cruda ve cero filas. Nunca `SET LOCAL` a mano en un router.
+  Workers usan `tenant_txn(...)` para el mismo fin.
+- **Anonymize before any LLM call.** `app.services.anonymizer` → tokens reversibles `[KIND_AABB]`.
+  El sufijo de 4 chars es determinístico (cache-friendly) — no lo randomices.
+- **Routers stay thin.** Nada de queries SQLAlchemy en routers; empujá a services/workers.
+- **Pydantic v2 only** — `model_validate`, `model_dump`, `ConfigDict`. Nada de `.dict()` v1.
+- One **Evaluation** per Conversation (`UNIQUE(conversation_id)`). Respetá los upserts idempotentes
+  (`pg_insert(...).on_conflict_do_nothing`).
+- **API keys de proveedor cifradas** con Fernet en `organizations.{provider}_api_key_encrypted`;
+  nunca se devuelven en claro (la UI ve un masked). Ver `routers/settings.py` + `services/secret_crypto.py`.
 
 ## Migrations
 
-Alembic. Never hand-edit `migrations/versions/*` after they ship. New schema change:
-`uv run alembic revision --autogenerate -m "..."` then review. Migration 0003 encrypts
-`webhook_secret` (Fernet) — plaintext columns are gone.
+Alembic. Archivos en `migrations/versions/*` con prefijo de fecha (ej.
+`20260623_1200_deepseek_provider.py`). No edites a mano una migración ya shippeada. Cambio de schema:
+`uv run alembic revision --autogenerate -m "..."` y revisá.
 
 ## Commands (run from `insyta-api/`)
 
 ```bash
 uv sync                          # install
-uv run uvicorn app.main:app --reload
+uv run uvicorn app.main:app --reload   # http://127.0.0.1:8000  (/docs, /redoc)
 uv run pytest                    # tests scoped here (testpaths=["tests"], asyncio auto)
 uv run ruff check . && uv run ruff format .
 uv run mypy app
@@ -51,11 +85,11 @@ uv run python scripts/audit_bpmn_coverage.py   # BPMN audit: endpoints vs BPMN t
 ```
 
 Run tests from **this dir**, not repo root, to keep them scoped and avoid timeouts.
-ruff line-length = 100.
+ruff line-length = 100. mypy en strict.
 
 ## Don'ts
 
-- Don't bypass RLS, don't log raw PII (structlog config strips it — keep it that way).
-- Don't call Anthropic/OpenAI outside `app/llm/` clients.
-- Don't add WebSockets — the live feed is SSE over Redis Pub/Sub (`tenant:{org_id}:feed`),
-  ADR 0004.
+- Don't bypass RLS, don't log raw PII.
+- Don't call Anthropic/OpenAI/DeepSeek outside `app/llm/` clients.
+- Don't reintroducir webhooks/SSE/alerts/Beat ad hoc — si los traés, es un vertical slice que
+  sigue su ADR (0001/0003/0004/0005).

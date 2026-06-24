@@ -116,5 +116,8 @@ def test_get_current_user_dataclass_shape():
     assert cu.allowed_project_ids == []
 
 
+# DEAD-CODE 2026-06-24 (test-fantasma): `assert callable(...)` no prueba comportamiento.
+# Candidato a borrar o reescribir como un test real (token inválido → 401, sin org → 403,
+# etc.). Se deja anotado para tu revisión.
 def test_get_current_user_is_callable():
     assert callable(get_current_user)

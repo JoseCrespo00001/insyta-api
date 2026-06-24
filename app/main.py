@@ -15,6 +15,7 @@ from app.routers import (
     improvements,
     me,
     projects,
+    score,
     uploads,
 )
 from app.routers import (
@@ -22,6 +23,48 @@ from app.routers import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Orden + descripción de los grupos en Swagger/ReDoc. FastAPI respeta este orden
+# y muestra la descripción bajo cada sección, así los endpoints son fáciles de
+# ubicar (en vez de salir alfabéticos y sin contexto).
+OPENAPI_TAGS = [
+    {"name": "health", "description": "Liveness/readiness. Sin auth."},
+    {
+        "name": "auth",
+        "description": "Bootstrap del usuario+org en el primer hit (Supabase JWT).",
+    },
+    {
+        "name": "me",
+        "description": "Identidad del usuario actual (org, rol, proyectos permitidos).",
+    },
+    {"name": "projects", "description": "CRUD de proyectos del tenant."},
+    {
+        "name": "conversations",
+        "description": "Lectura de conversaciones/mensajes (lista, detalle, borrado).",
+    },
+    {
+        "name": "score",
+        "description": "Score agregado (0-100) por proyecto a partir de las evaluaciones.",
+    },
+    {
+        "name": "uploads",
+        "description": "Subida de CSV/export → ingestión (procesa a conversaciones).",
+    },
+    {
+        "name": "flows",
+        "description": "Flujos (Langflow): alta, listado y auditoría del flujo.",
+    },
+    {
+        "name": "audits",
+        "description": "Auditorías: dispara el LLM-as-judge sobre conversaciones.",
+    },
+    {
+        "name": "improvements",
+        "description": "Mejoras sugeridas a partir de las auditorías.",
+    },
+    {"name": "dashboard", "description": "Métricas agregadas del tenant."},
+    {"name": "settings", "description": "API keys de proveedor LLM (cifradas Fernet)."},
+]
 
 
 @asynccontextmanager
@@ -52,6 +95,7 @@ def create_app() -> FastAPI:
         version="0.1.0",
         description="Plataforma de mejora continua de agentes LLM en produccion",
         lifespan=lifespan,
+        openapi_tags=OPENAPI_TAGS,
     )
 
     app.add_middleware(
@@ -67,6 +111,7 @@ def create_app() -> FastAPI:
     app.include_router(me.router)
     app.include_router(projects.router)
     app.include_router(conversations.router)
+    app.include_router(score.router)
     app.include_router(uploads.router)
     app.include_router(flows.router)
     app.include_router(audits.router)

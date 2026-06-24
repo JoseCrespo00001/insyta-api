@@ -79,6 +79,9 @@ class TestSpan:
             assert attrs.get("llm.cost_usd") == "0.001"
 
     def test_record_usage_on_noop_is_safe(self):
+        # NOTE 2026-06-24 (audit): test de "no-raise" — válido pero débil (no asserta
+        # estado). Guarda la ruta sin Phoenix. Se podría reforzar verificando que el
+        # span noop no acumula atributos. No es dead-code; se deja como está.
         # Without init, record_llm_usage on a noop span should not raise.
         usage = LLMUsage(model="m", input_tokens=10)
         with llm_span("x", "m") as span:

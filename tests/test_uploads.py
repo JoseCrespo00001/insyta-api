@@ -209,11 +209,14 @@ async def test_csv_with_wrong_extension_returns_400(_stub_celery):
         )
         token = _make_token(ids["org_id"], [ids["proj_id"]])
         async with _client() as c:
+            # NOTE 2026-06-24: el endpoint acepta .csv Y .txt (export de WhatsApp),
+            # así que un .txt da 202. Para testear el rechazo real usamos una
+            # extensión genuinamente inválida (.pdf).
             r = await c.post(
                 "/api/v1/uploads/csv",
                 headers={"Authorization": f"Bearer {token}"},
                 data={"project_public_id": ids["proj_public"]},
-                files={"file": ("data.txt", io.BytesIO(b"hello"), "text/plain")},
+                files={"file": ("data.pdf", io.BytesIO(b"hello"), "application/pdf")},
             )
         assert r.status_code == 400
         assert ".csv" in r.json()["detail"]

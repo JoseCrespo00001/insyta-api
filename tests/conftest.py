@@ -3,9 +3,6 @@
 `postgres_engine` connects to the docker-compose Postgres on port 5433. The
 session fixture truncates touched tables between tests to keep RLS assertions
 isolated. If the database is not available we skip RLS tests rather than fail.
-
-The slowapi limiter is replaced with an in-memory storage at import time so the
-default Redis-backed limiter never tries to connect during tests.
 """
 
 from __future__ import annotations

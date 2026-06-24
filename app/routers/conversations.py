@@ -16,8 +16,8 @@ import logging
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import delete, func, select
+from pydantic import BaseModel, ConfigDict
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
@@ -26,16 +26,10 @@ from app.services.report_format import eval_to_camel
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/v1", tags=["reads"])
+router = APIRouter(prefix="/api/v1", tags=["conversations"])
 
 DEFAULT_PAGE_SIZE = 50
 MAX_PAGE_SIZE = 200
-
-
-class ProjectScoreResponse(BaseModel):
-    project_public_id: str
-    score: int | None = Field(description="0-100 average; null if no evaluations yet")
-    evaluation_count: int
 
 
 class ConversationSummary(BaseModel):
@@ -99,31 +93,6 @@ async def _resolve_project_id(session: AsyncSession, public_id: str) -> uuid.UUI
     if project_id is None:
         raise HTTPException(status_code=404, detail="Project not found")
     return project_id
-
-
-@router.get(
-    "/projects/{project_public_id}/score",
-    response_model=ProjectScoreResponse,
-)
-async def get_project_score(
-    project_public_id: str,
-    session: AsyncSession = Depends(get_db_with_tenant_context),
-) -> ProjectScoreResponse:
-    project_id = await _resolve_project_id(session, project_public_id)
-
-    result = await session.execute(
-        select(
-            func.avg(Evaluation.score).label("avg_score"),
-            func.count(Evaluation.id).label("count"),
-        ).where(Evaluation.project_id == project_id, Evaluation.score.isnot(None))
-    )
-    row = result.one()
-    avg = int(round(row.avg_score)) if row.avg_score is not None else None
-    return ProjectScoreResponse(
-        project_public_id=project_public_id,
-        score=avg,
-        evaluation_count=int(row.count or 0),
-    )
 
 
 @router.get(

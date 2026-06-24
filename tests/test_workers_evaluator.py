@@ -59,7 +59,7 @@ class FakeProvider:
         )
         self.calls = 0
 
-    async def evaluate(self, messages):
+    async def evaluate(self, messages, context=None):
         self.calls += 1
         if self.raise_exc is not None:
             raise self.raise_exc
