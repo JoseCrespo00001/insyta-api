@@ -38,8 +38,21 @@ async def _dispose_module_engine():
 
 TEST_DATABASE_URL = os.getenv(
     "TEST_DATABASE_URL",
-    "postgresql+asyncpg://postgres:postgres@localhost:5433/insyta",
+    # DB DEDICADA de tests — NUNCA la DB de la app (`insyta`). Los tests dropean
+    # y re-crean el schema; si apuntaran a `insyta` borrarían los datos reales.
+    "postgresql+asyncpg://postgres:postgres@localhost:5433/insyta_test",
 )
+
+# Guarda de seguridad: si el TEST_DATABASE_URL es la DB de la app, abortar.
+# (Ya pasó: correr pytest contra `insyta` borró proyectos/conversaciones reales.)
+_APP_DB_URL = os.getenv("DATABASE_URL", "")
+if TEST_DATABASE_URL.rstrip("/").endswith("/insyta") or (
+    _APP_DB_URL and TEST_DATABASE_URL == _APP_DB_URL
+):
+    raise RuntimeError(
+        "TEST_DATABASE_URL apunta a la DB de la app — abortando para no borrar "
+        "datos. Usá una DB dedicada (ej. .../insyta_test)."
+    )
 
 
 async def _db_available(url: str) -> bool:
