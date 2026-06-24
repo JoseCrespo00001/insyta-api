@@ -14,7 +14,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -150,6 +150,24 @@ async def update_project(
         updated_at=project.updated_at.isoformat(),
         company_context=project.company_context,
     )
+
+
+@router.delete("/projects/{project_public_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_project(
+    project_public_id: str,
+    session: AsyncSession = Depends(get_db_with_tenant_context),
+) -> None:
+    """Borra el proyecto y todo lo suyo (agentes, conversaciones, flujos,
+    auditorías, uploads, mejoras) por FK CASCADE."""
+    project_id = (
+        await session.execute(
+            select(Project.id).where(Project.public_id == project_public_id)
+        )
+    ).scalar_one_or_none()
+    if project_id is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    await session.execute(delete(Project).where(Project.id == project_id))
+    await session.commit()
 
 
 @router.post(
