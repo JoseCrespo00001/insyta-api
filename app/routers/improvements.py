@@ -79,6 +79,8 @@ async def _improvements_payload(
             "impact": imp.impact,
             "why": imp.why,
             "status": imp.status,
+            "nodeJson": imp.node_json,
+            "prompt": imp.prompt,
             "conversations": convs_by_imp.get(imp.id, []),
         }
         for imp in improvements

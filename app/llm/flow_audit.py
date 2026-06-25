@@ -55,13 +55,15 @@ esta forma exacta (sin texto extra, sin markdown):
       "detail": "<qué hacer y por qué, concreto, español>",
       "target": "<nombre del nodo/agente afectado o 'flujo'>",
       "severity": "info|warning|critical",
-      "impact": "<beneficio esperado, ej: '+resolución', 'evita respuestas falsas'>"
+      "impact": "<beneficio esperado, ej: '+resolución', 'evita respuestas falsas'>",
+      "node_json": "<si aplica, snippet JSON del nodo a agregar/cambiar en formato Langflow (string JSON), listo para pegar; '' si no aplica>",
+      "prompt": "<instrucción lista para pegarle a una IA constructora de flujos Langflow para aplicar este cambio>"
     }
   ]
 }
 
-Sé específico y accionable; nombrá nodos reales del flujo. No inventes \
-componentes que no existan en Langflow."""
+Sé específico y accionable; nombrá nodos reales del flujo. El node_json debe ser \
+JSON válido. No inventes componentes que no existan en Langflow."""
 
 
 def load_knowledge() -> str:
@@ -197,23 +199,10 @@ async def audit_flow(flow_json: dict, *, mode: str = "standard") -> dict:
 
     text = "".join(b.text for b in resp.content if getattr(b, "type", "") == "text")
     parsed = _parse(text)
-    # Normalización defensiva.
-    suggestions = parsed.get("suggestions") or []
     return {
         "completeness": int(parsed.get("completeness") or 0),
         "summary": str(parsed.get("summary") or ""),
-        "suggestions": [
-            {
-                "type": str(s.get("type") or "other"),
-                "title": str(s.get("title") or ""),
-                "detail": str(s.get("detail") or ""),
-                "target": str(s.get("target") or "flujo"),
-                "severity": str(s.get("severity") or "info"),
-                "impact": str(s.get("impact") or ""),
-            }
-            for s in suggestions
-            if isinstance(s, dict) and s.get("title")
-        ],
+        "suggestions": _normalize_suggestions(parsed.get("suggestions") or []),
         "mode": mode,
     }
 
@@ -230,17 +219,19 @@ conversación que lo motivó. Devolvé SOLO JSON válido:
 {
   "suggestions": [
     {
-      "type": "add_agent|add_condition|add_tool|other",
+      "type": "add_agent|add_condition|add_tool|add_memory|other",
       "title": "<qué nodo agregar, corto, español>",
-      "detail": "<cambio concreto en el JSON: qué nodo, dónde conectarlo, qué prompt/tool>",
+      "detail": "<cambio concreto: qué nodo, dónde conectarlo, qué prompt/tool>",
       "target": "<nodo del flujo cerca del cual va, o 'flujo'>",
-      "impact": "<a cuántas/qué conversaciones cubre>"
+      "impact": "<a cuántas/qué conversaciones cubre>",
+      "node_json": "<snippet JSON del nodo nuevo en formato Langflow (data.type, data.node.template con su system_prompt/instrucciones), listo para pegar; string JSON>",
+      "prompt": "<instrucción lista para pegarle a una IA constructora de flujos Langflow para que aplique este cambio (qué nodo crear, con qué prompt/tool y a qué nodo conectarlo)>"
     }
   ]
 }
 
-No inventes componentes que no existan en Langflow. Si el flujo ya cubre todo, \
-devolvé suggestions vacío."""
+No inventes componentes que no existan en Langflow. El node_json debe ser JSON \
+válido. Si el flujo ya cubre todo, devolvé suggestions vacío."""
 
 
 async def _complete(system: str, user: str, *, max_tokens: int, provider: str) -> str:
@@ -317,10 +308,26 @@ async def propose_flow_changes(
             f"{i}. {u.get('contact') or 's/nombre'}: "
             f"{u.get('preview') or ''} — problema: {u.get('note') or 'no cubierto'}"
         )
-    text = await _complete(system, "\n".join(lines), max_tokens=2048, provider=provider)
+    text = await _complete(system, "\n".join(lines), max_tokens=3072, provider=provider)
     parsed = _parse(text)
+    return _normalize_suggestions(
+        parsed.get("suggestions") or [],
+        default_impact="cubre conversaciones no atendidas",
+    )
+
+
+def _coerce_json_str(v: object) -> str:
+    """node_json puede venir como dict o string; lo dejamos como string."""
+    if v is None or v == "":
+        return ""
+    if isinstance(v, dict | list):
+        return json.dumps(v, ensure_ascii=False, indent=2)
+    return str(v)
+
+
+def _normalize_suggestions(items: list, *, default_impact: str = "") -> list[dict]:
     out = []
-    for s in parsed.get("suggestions") or []:
+    for s in items:
         if isinstance(s, dict) and s.get("title"):
             out.append(
                 {
@@ -328,9 +335,10 @@ async def propose_flow_changes(
                     "title": str(s.get("title") or ""),
                     "detail": str(s.get("detail") or ""),
                     "target": str(s.get("target") or "flujo"),
-                    "impact": str(
-                        s.get("impact") or "cubre conversaciones no atendidas"
-                    ),
+                    "severity": str(s.get("severity") or "info"),
+                    "impact": str(s.get("impact") or default_impact),
+                    "node_json": _coerce_json_str(s.get("node_json")),
+                    "prompt": str(s.get("prompt") or ""),
                 }
             )
     return out

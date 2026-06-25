@@ -51,6 +51,10 @@ class Improvement(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     detail: Mapped[str] = mapped_column(Text, nullable=False)
     impact: Mapped[str] = mapped_column(String(200), nullable=False)
     why: Mapped[str] = mapped_column(Text, nullable=False)
+    # Cambio sugerido al flujo: snippet JSON del nodo a agregar + prompt para
+    # pasarle a una IA y que aplique el cambio al flujo.
+    node_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
 
     __table_args__ = (

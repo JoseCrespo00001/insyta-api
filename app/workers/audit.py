@@ -219,6 +219,8 @@ async def _persist_improvements(
                 detail=sug["detail"],
                 impact=sug["impact"],
                 why=sug["detail"],
+                node_json=sug.get("node_json") or None,
+                prompt=sug.get("prompt") or None,
                 status="pending",
             )
         )
@@ -356,7 +358,8 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
                     issue_counter[v.issue_type] += 1
                 # Conversación que pidió algo fuera del flujo / no resuelto.
                 if (
-                    v.issue_type in ("alcance", "no_resuelve")
+                    v.issue_type
+                    in ("alcance", "no_resuelve", "alucinacion", "contradiccion")
                     and conv_id not in unhandled_seen
                 ):
                     unhandled_seen.add(conv_id)
