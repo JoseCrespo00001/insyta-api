@@ -13,7 +13,15 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
-from app.models import Audit, Conversation, Evaluation, Flow, Improvement, Project
+from app.models import (
+    Audit,
+    Conversation,
+    Evaluation,
+    Flow,
+    Improvement,
+    MessageEvaluation,
+    Project,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +68,69 @@ async def get_dashboard(
         "improvementsApplied": int(improvements_applied or 0),
         "suggestionsOpen": int(suggestions_open or 0),
         "satisfaction": satisfaction,
+    }
+
+    # --- Datos clave de calidad (los mismos que se ven por conversación) ---
+    # Veredictos por mensaje agregados a nivel org: alucinaciones, mensajes
+    # marcados (warning/error) y desglose por tipo de problema.
+    issue_rows = (
+        await session.execute(
+            select(MessageEvaluation.issue_type, func.count(MessageEvaluation.id))
+            .where(MessageEvaluation.issue_type.isnot(None))
+            .group_by(MessageEvaluation.issue_type)
+        )
+    ).all()
+    issues_by_type = {str(t): int(c) for t, c in issue_rows if t}
+    hallucinations = issues_by_type.get("alucinacion", 0)
+    flagged_messages = (
+        await session.execute(
+            select(func.count(MessageEvaluation.id)).where(
+                MessageEvaluation.label.in_(["warning", "error"])
+            )
+        )
+    ).scalar_one()
+    conversations_with_issues = (
+        await session.execute(
+            select(func.count(func.distinct(MessageEvaluation.conversation_id))).where(
+                MessageEvaluation.label.in_(["warning", "error"])
+            )
+        )
+    ).scalar_one()
+
+    # Potencial de cliente / no resueltas (nivel conversación).
+    leads = (
+        await session.execute(
+            select(func.count(Evaluation.id)).where(
+                Evaluation.resolution.is_(True), Evaluation.satisfaction >= 4
+            )
+        )
+    ).scalar_one()
+    unresolved = (
+        await session.execute(
+            select(func.count(Evaluation.id)).where(Evaluation.resolution.is_(False))
+        )
+    ).scalar_one()
+
+    # Temas más frecuentes (de las evaluaciones a nivel conversación).
+    topic_rows = (
+        await session.execute(
+            select(Evaluation.topic, func.count(Evaluation.id))
+            .where(Evaluation.topic.isnot(None))
+            .group_by(Evaluation.topic)
+            .order_by(func.count(Evaluation.id).desc())
+            .limit(6)
+        )
+    ).all()
+    topics = [{"topic": str(t), "count": int(c)} for t, c in topic_rows if t]
+
+    quality = {
+        "hallucinations": int(hallucinations or 0),
+        "flaggedMessages": int(flagged_messages or 0),
+        "conversationsWithIssues": int(conversations_with_issues or 0),
+        "leads": int(leads or 0),
+        "unresolved": int(unresolved or 0),
+        "issuesByType": issues_by_type,
+        "topics": topics,
     }
 
     # --- Per-project summaries ---
@@ -143,6 +214,7 @@ async def get_dashboard(
 
     return {
         "overview": overview,
+        "quality": quality,
         "projectSummaries": project_summaries,
         "recentActivity": recent[:10],
     }
