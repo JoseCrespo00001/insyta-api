@@ -21,7 +21,14 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
-from app.models import Conversation, Evaluation, Message, Project, Upload
+from app.models import (
+    Conversation,
+    Evaluation,
+    Message,
+    MessageEvaluation,
+    Project,
+    Upload,
+)
 from app.services.report_format import eval_to_camel
 
 logger = logging.getLogger(__name__)
@@ -58,6 +65,11 @@ class MessageOut(BaseModel):
     content: str
     content_anonymized: str | None
     timestamp: str
+    # Veredicto del judge para este mensaje (última auditoría), si existe.
+    label: str | None = None  # ok | warning | error
+    issue_type: str | None = None  # alucinacion | error_politica | ...
+    severity: str | None = None
+    note: str | None = None
 
 
 class ConversationDetail(BaseModel):
@@ -292,13 +304,26 @@ async def get_conversation_detail(
     )
     evaluation = eval_result.scalar_one_or_none()
 
-    return ConversationDetail(
-        public_id=conv.public_id,
-        external_id=conv.external_id,
-        platform=conv.platform,
-        status=conv.status,
-        started_at=conv.started_at.isoformat() if conv.started_at else None,
-        messages=[
+    # Veredictos por mensaje (último por mensaje, de la auditoría más reciente).
+    me_rows = (
+        (
+            await session.execute(
+                select(MessageEvaluation)
+                .where(MessageEvaluation.conversation_id == conv.id)
+                .order_by(MessageEvaluation.created_at.asc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    verdict_by_msg: dict = {}
+    for me in me_rows:
+        verdict_by_msg[me.message_id] = me  # asc → queda el más reciente
+
+    messages_out: list[MessageOut] = []
+    for m in messages:
+        v = verdict_by_msg.get(m.id)
+        messages_out.append(
             MessageOut(
                 # Texto real para el dueño (su data, bajo RLS). La versión
                 # anonimizada (content_anonymized) es la que va al LLM.
@@ -307,9 +332,20 @@ async def get_conversation_detail(
                 content=m.content,
                 content_anonymized=m.content_anonymized,
                 timestamp=m.timestamp.isoformat(),
+                label=v.label if v else None,
+                issue_type=v.issue_type if v else None,
+                severity=v.severity if v else None,
+                note=v.note if v else None,
             )
-            for m in messages
-        ],
+        )
+
+    return ConversationDetail(
+        public_id=conv.public_id,
+        external_id=conv.external_id,
+        platform=conv.platform,
+        status=conv.status,
+        started_at=conv.started_at.isoformat() if conv.started_at else None,
+        messages=messages_out,
         evaluation=eval_to_camel(evaluation) if evaluation else None,
     )
 
