@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from app.models.audits import Audit, AuditConversation, MessageEvaluation
 from app.models.base import Base
+from app.models.flow_versions import FlowVersion
 from app.models.flows import Flow
 from app.models.improvements import Improvement, ImprovementConversation
 from app.models.tenancy import (
@@ -29,6 +30,7 @@ __all__ = [
     "Conversation",
     "Evaluation",
     "Flow",
+    "FlowVersion",
     "Improvement",
     "ImprovementConversation",
     "Message",

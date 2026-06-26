@@ -13,12 +13,12 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import CurrentUser, get_current_user
 from app.core.db import get_db_with_tenant_context
-from app.models import Flow, Organization, Project
+from app.models import Flow, FlowVersion, Organization, Project
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +76,43 @@ def _extract_metadata(flow_json: dict) -> dict:
         "agentCount": agent_count,
         "name": flow_json.get("name"),
     }
+
+
+async def _snapshot_version(
+    session: AsyncSession,
+    flow: Flow,
+    *,
+    label: str,
+    source: str,
+) -> FlowVersion:
+    """Guarda un snapshot del estado ACTUAL de `flow` como una versión nueva.
+
+    Numeración monotónica por flujo; la versión más alta es siempre la activa
+    (un restore crea una versión nueva en vez de mutar el historial).
+    """
+    last = (
+        await session.execute(
+            select(func.max(FlowVersion.version_number)).where(
+                FlowVersion.flow_id == flow.id
+            )
+        )
+    ).scalar_one_or_none()
+    version_number = (last or 0) + 1
+    snapshot = FlowVersion(
+        public_id=f"flv_{uuid.uuid4().hex[:24]}",
+        flow_id=flow.id,
+        project_id=flow.project_id,
+        org_id=flow.org_id,
+        version_number=version_number,
+        label=label or f"Versión {version_number}",
+        source=source,
+        flow_json=flow.flow_json,
+        size_bytes=flow.size_bytes,
+        agent_count=flow.agent_count,
+    )
+    session.add(snapshot)
+    await session.flush()
+    return snapshot
 
 
 async def _resolve_project(
@@ -179,6 +216,7 @@ async def create_flow(
     )
     session.add(flow)
     await session.flush()
+    await _snapshot_version(session, flow, label="Versión inicial", source="initial")
     logger.info(
         "[FLOWS] Created public_id=%s project=%s agents=%d size=%d",
         public_id,
@@ -193,6 +231,9 @@ class FlowUpdate(BaseModel):
     name: str | None = None
     version: str | None = None
     flow_json: dict | None = None
+    # Si cambia flow_json, se guarda una versión en el historial con este nombre.
+    version_label: str | None = None
+    version_source: str | None = None  # improvement | manual | upload
 
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
 
@@ -212,6 +253,7 @@ async def update_flow(
         flow.name = payload.name
     if payload.version is not None:
         flow.version = payload.version
+    json_changed = False
     if payload.flow_json is not None:
         metadata = _extract_metadata(payload.flow_json)
         flow.flow_json = payload.flow_json
@@ -220,7 +262,26 @@ async def update_flow(
             json.dumps(payload.flow_json, ensure_ascii=False).encode("utf-8")
         )
         flow.agent_count = metadata["agentCount"]
+        json_changed = True
     await session.flush()
+    if json_changed:
+        # Cada cambio del JSON queda como versión nueva en el historial.
+        source = (
+            payload.version_source
+            if payload.version_source
+            in (
+                "improvement",
+                "manual",
+                "upload",
+            )
+            else "manual"
+        )
+        await _snapshot_version(
+            session,
+            flow,
+            label=payload.version_label or "Cambio manual",
+            source=source,
+        )
     return _to_summary(flow)
 
 
@@ -236,6 +297,203 @@ async def delete_flow(
         raise HTTPException(status_code=404, detail="Flow not found")
     await session.delete(flow)
     await session.flush()
+
+
+# ── Historial de versiones del flujo ────────────────────────────────────────
+
+
+class FlowVersionSummary(_CamelModel):
+    id: str
+    version_number: int
+    label: str
+    source: str
+    size_bytes: int
+    agent_count: int
+    created_at: str
+    is_current: bool = False
+
+
+class FlowVersionDetail(FlowVersionSummary):
+    json_: str = Field(serialization_alias="json")
+
+
+async def _load_flow(session: AsyncSession, flow_public_id: str) -> Flow:
+    flow = (
+        await session.execute(select(Flow).where(Flow.public_id == flow_public_id))
+    ).scalar_one_or_none()
+    if flow is None:
+        raise HTTPException(status_code=404, detail="Flow not found")
+    return flow
+
+
+@router.get("/flows/{flow_public_id}/versions", response_model=list[FlowVersionSummary])
+async def list_flow_versions(
+    flow_public_id: str,
+    session: AsyncSession = Depends(get_db_with_tenant_context),
+) -> list[FlowVersionSummary]:
+    """Historial de versiones del flujo (más reciente primero). La versión con
+    el número más alto es la activa."""
+    flow = await _load_flow(session, flow_public_id)
+    rows = (
+        (
+            await session.execute(
+                select(FlowVersion)
+                .where(FlowVersion.flow_id == flow.id)
+                .order_by(FlowVersion.version_number.desc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    # Backfill: flujos creados antes del historial no tienen versiones. La
+    # primera vez que se abre el historial, sembramos su estado actual como v1.
+    if not rows:
+        await _snapshot_version(
+            session, flow, label="Versión inicial", source="initial"
+        )
+        rows = (
+            (
+                await session.execute(
+                    select(FlowVersion)
+                    .where(FlowVersion.flow_id == flow.id)
+                    .order_by(FlowVersion.version_number.desc())
+                )
+            )
+            .scalars()
+            .all()
+        )
+    current = rows[0].version_number if rows else 0
+    return [
+        FlowVersionSummary(
+            id=v.public_id,
+            version_number=v.version_number,
+            label=v.label,
+            source=v.source,
+            size_bytes=v.size_bytes,
+            agent_count=v.agent_count,
+            created_at=v.created_at.isoformat(),
+            is_current=v.version_number == current,
+        )
+        for v in rows
+    ]
+
+
+@router.get(
+    "/flows/{flow_public_id}/versions/{version_public_id}",
+    response_model=FlowVersionDetail,
+)
+async def get_flow_version(
+    flow_public_id: str,
+    version_public_id: str,
+    session: AsyncSession = Depends(get_db_with_tenant_context),
+) -> FlowVersionDetail:
+    flow = await _load_flow(session, flow_public_id)
+    v = (
+        await session.execute(
+            select(FlowVersion).where(
+                FlowVersion.public_id == version_public_id,
+                FlowVersion.flow_id == flow.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if v is None:
+        raise HTTPException(status_code=404, detail="Version not found")
+    current = (
+        await session.execute(
+            select(func.max(FlowVersion.version_number)).where(
+                FlowVersion.flow_id == flow.id
+            )
+        )
+    ).scalar_one_or_none() or 0
+    return FlowVersionDetail(
+        id=v.public_id,
+        version_number=v.version_number,
+        label=v.label,
+        source=v.source,
+        size_bytes=v.size_bytes,
+        agent_count=v.agent_count,
+        created_at=v.created_at.isoformat(),
+        is_current=v.version_number == current,
+        json_=json.dumps(v.flow_json, ensure_ascii=False, indent=2),
+    )
+
+
+class FlowVersionRename(BaseModel):
+    label: str
+
+
+@router.patch(
+    "/flows/{flow_public_id}/versions/{version_public_id}",
+    response_model=FlowVersionSummary,
+)
+async def rename_flow_version(
+    flow_public_id: str,
+    version_public_id: str,
+    payload: FlowVersionRename,
+    session: AsyncSession = Depends(get_db_with_tenant_context),
+) -> FlowVersionSummary:
+    flow = await _load_flow(session, flow_public_id)
+    v = (
+        await session.execute(
+            select(FlowVersion).where(
+                FlowVersion.public_id == version_public_id,
+                FlowVersion.flow_id == flow.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if v is None:
+        raise HTTPException(status_code=404, detail="Version not found")
+    label = payload.label.strip()
+    if label:
+        v.label = label[:200]
+    await session.flush()
+    return FlowVersionSummary(
+        id=v.public_id,
+        version_number=v.version_number,
+        label=v.label,
+        source=v.source,
+        size_bytes=v.size_bytes,
+        agent_count=v.agent_count,
+        created_at=v.created_at.isoformat(),
+    )
+
+
+@router.post(
+    "/flows/{flow_public_id}/versions/{version_public_id}/restore",
+    response_model=FlowSummary,
+)
+async def restore_flow_version(
+    flow_public_id: str,
+    version_public_id: str,
+    session: AsyncSession = Depends(get_db_with_tenant_context),
+) -> FlowSummary:
+    """Vuelve el flujo a una versión pasada. No borra historial: copia ese JSON
+    al flujo y lo guarda como una versión nueva (la activa)."""
+    flow = await _load_flow(session, flow_public_id)
+    v = (
+        await session.execute(
+            select(FlowVersion).where(
+                FlowVersion.public_id == version_public_id,
+                FlowVersion.flow_id == flow.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if v is None:
+        raise HTTPException(status_code=404, detail="Version not found")
+
+    metadata = _extract_metadata(v.flow_json)
+    flow.flow_json = v.flow_json
+    flow.flow_metadata = metadata
+    flow.size_bytes = v.size_bytes
+    flow.agent_count = v.agent_count
+    await session.flush()
+    await _snapshot_version(
+        session,
+        flow,
+        label=f"Restaurado de v{v.version_number}",
+        source="restore",
+    )
+    return _to_summary(flow)
 
 
 class FlowAuditRequest(BaseModel):
