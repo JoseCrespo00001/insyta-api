@@ -17,6 +17,10 @@ RUN pip install uv
 COPY pyproject.toml ./
 RUN uv pip install --system -r pyproject.toml
 
+# Modelo spaCy que usa Presidio (app/services/anonymizer.py -> es_core_news_md).
+# Sin esto el anonymizer crashea al primer LLM call y se rompe la anonimización PII.
+RUN python -m spacy download es_core_news_md
+
 COPY . .
 
 EXPOSE 8000
