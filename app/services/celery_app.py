@@ -24,6 +24,22 @@ from app.core.config import get_settings
 logger = logging.getLogger(__name__)
 
 
+# Tracing OTel→Phoenix por worker desactivado por ahora. Para reactivar,
+# descomentar el import de arriba y este bloque:
+# from celery.signals import worker_process_init
+#
+# @worker_process_init.connect
+# def _init_worker_tracing(**_kwargs) -> None:
+#     """Activa el tracing OTel→Phoenix en cada proceso worker (idempotente).
+#
+#     Los spans de evaluate_conversation/run_audit sólo se exportan si el worker
+#     inicializó el TracerProvider; sin esto quedaban como NoOp.
+#     """
+#     from app.observability import init_tracing
+#
+#     init_tracing()
+
+
 def _build_celery() -> Celery:
     settings = get_settings()
     app = Celery(

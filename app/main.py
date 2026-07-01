@@ -77,6 +77,10 @@ async def lifespan(app: FastAPI):
         raise RuntimeError(
             f"JWT secret not configured (got weak default in environment={settings.environment!r})"
         )
+    # Tracing OTel→Phoenix desactivado por ahora. Para reactivar, descomentar:
+    # from app.observability import init_tracing
+    #
+    # init_tracing()  # idempotente; NoOp si PHOENIX_ENDPOINT vacío
     logger.info("[STARTUP] Insyta API starting in %s mode", settings.environment)
     yield
     logger.info("[SHUTDOWN] Insyta API shutting down")
