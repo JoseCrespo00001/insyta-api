@@ -168,7 +168,7 @@ async def _cleanup_orgs(su_engine: AsyncEngine, ids: dict) -> None:
 def _make_token(org_id: uuid.UUID, allowed: list[uuid.UUID]) -> str:
     base = {
         "sub": "test-user",
-        "email": "test@insyta.io",
+        "email": "test@insyta.space",
         "iat": int(time.time()),
         "exp": int(time.time()) + 3600,
         "org_id": str(org_id),

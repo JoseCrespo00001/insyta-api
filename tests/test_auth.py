@@ -68,7 +68,7 @@ def test_valid_token_returns_user_payload(client: TestClient):
     token = _make_token(
         {
             "sub": "user-123",
-            "email": "user@insyta.io",
+            "email": "user@insyta.space",
             "org_id": org_id,
             "allowed_project_ids": [proj_a, proj_b],
         }
@@ -77,7 +77,7 @@ def test_valid_token_returns_user_payload(client: TestClient):
     assert response.status_code == 200
     body = response.json()
     assert body["userId"] == "user-123"
-    assert body["email"] == "user@insyta.io"
+    assert body["email"] == "user@insyta.space"
     assert body["orgId"] == org_id
     assert set(body["allowedProjectIds"]) == {proj_a, proj_b}
 

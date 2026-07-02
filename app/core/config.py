@@ -50,7 +50,7 @@ class Settings(BaseSettings):
     sentry_dsn: str | None = None
 
     resend_api_key: str | None = None
-    email_from: str = Field(default="alerts@insyta.io")
+    email_from: str = Field(default="alerts@insyta.space")
 
     @field_validator("jwt_secret")
     @classmethod
@@ -71,26 +71,27 @@ class Settings(BaseSettings):
 
     @field_validator("webhook_secret_key")
     @classmethod
-    def validate_webhook_secret_key(
-        cls, v: SecretStr, info: ValidationInfo
-    ) -> SecretStr:
+    def validate_webhook_secret_key(cls, v: SecretStr, info: ValidationInfo) -> SecretStr:
+        # Los webhooks están diferidos (no hay feature de webhook), así que este
+        # secreto es OPCIONAL: solo validamos el formato SI se provee un valor.
+        # Cuando se implemente el slice de webhooks, hacerlo obligatorio ahí.
+        # (El cifrado de secretos en DB NO usa esta key: deriva del jwt_secret,
+        # ver services/secret_crypto.py.)
         environment = info.data.get("environment", "development")
-        if environment == "development":
-            return v
         raw = v.get_secret_value()
+        if environment == "development" or not raw:
+            return v
         if len(raw) < WEBHOOK_SECRET_KEY_MIN_LENGTH:
             raise ValueError(
-                "webhook_secret_key must be a base64-encoded Fernet key "
-                f"(>= {WEBHOOK_SECRET_KEY_MIN_LENGTH} chars) in "
+                "webhook_secret_key, si se setea, debe ser una Fernet key base64 "
+                f"(>= {WEBHOOK_SECRET_KEY_MIN_LENGTH} chars) en "
                 f"environment={environment!r} (got {len(raw)})"
             )
         return v
 
     @property
     def cors_origin_list(self) -> list[str]:
-        return [
-            origin.strip() for origin in self.cors_origins.split(",") if origin.strip()
-        ]
+        return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
 
 
 @lru_cache

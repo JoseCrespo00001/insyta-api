@@ -124,7 +124,7 @@ def _make_token(org_id: uuid.UUID) -> str:
     return jwt.encode(
         {
             "sub": "test-user",
-            "email": "test@insyta.io",
+            "email": "test@insyta.space",
             "iat": int(time.time()),
             "exp": int(time.time()) + 3600,
             "org_id": str(org_id),

@@ -67,7 +67,7 @@ async def test_bootstrap_then_me():
     if not await _db_available():
         pytest.skip("DB unavailable")
     sub = f"sub-{uuid.uuid4().hex[:12]}"
-    email = f"{uuid.uuid4().hex[:8]}@insyta.io"
+    email = f"{uuid.uuid4().hex[:8]}@insyta.space"
     token = _token(sub, email)
     headers = {"Authorization": f"Bearer {token}"}
 
