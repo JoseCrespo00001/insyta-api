@@ -38,3 +38,8 @@ local_data/
 .pgdata/
 .redisdata/
 app/llm/knowledge/langflow-docs-raw.md
+
+# Scratch seed scripts (dev-only: auto-firman JWTs, IDs hardcodeados — no repo-quality)
+_seed_*.py
+# Supabase CLI cache (link temp; la API usa Alembic, no migraciones supabase)
+supabase/
