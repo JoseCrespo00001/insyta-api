@@ -77,6 +77,42 @@ async def lifespan(app: FastAPI):
         raise RuntimeError(
             f"JWT secret not configured (got weak default in environment={settings.environment!r})"
         )
+
+    # Guard anti-bypass de RLS: si el rol con el que conectamos a Postgres es
+    # superuser o tiene BYPASSRLS, las policies de multi-tenancy quedan inertes
+    # (FORCE ROW LEVEL SECURITY no aplica a esos roles) y cualquier usuario ve la
+    # data de todas las orgs. Fuera de development —o apuntando a una DB de prod
+    # aunque environment diga development— nos negamos a arrancar.
+    from sqlalchemy import text
+
+    from app.core.db import engine
+
+    async with engine.connect() as conn:
+        role = (
+            await conn.execute(
+                text(
+                    "SELECT current_user AS name, rolsuper, rolbypassrls "
+                    "FROM pg_roles WHERE rolname = current_user"
+                )
+            )
+        ).one()
+    privileged = bool(role.rolsuper or role.rolbypassrls)
+    is_prod_db = (
+        "pooler.supabase.com" in settings.database_url
+        or "supabase.co" in settings.database_url
+    )
+    if privileged and (settings.environment != "development" or is_prod_db):
+        raise RuntimeError(
+            f"Refusing to start: DB role {role.name!r} bypasses RLS "
+            f"(rolsuper={role.rolsuper}, rolbypassrls={role.rolbypassrls}). "
+            "Connect as the non-privileged app role (insyta_app)."
+        )
+    if privileged:
+        logger.warning(
+            "[STARTUP] DB role %r bypasses RLS — OK solo en DB local descartable.",
+            role.name,
+        )
+
     # Tracing OTel→Phoenix desactivado por ahora. Para reactivar, descomentar:
     # from app.observability import init_tracing
     #
