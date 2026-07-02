@@ -22,6 +22,10 @@ class Settings(BaseSettings):
     database_url: str = Field(
         default="postgresql+asyncpg://postgres:postgres@localhost:5433/insyta"
     )
+    # URL usada SOLO por Alembic (crea tablas/extensiones/policies → necesita el
+    # rol dueño `postgres`). El runtime usa `database_url` con un rol sin BYPASSRLS
+    # para que las policies RLS se ejerzan. Si no se setea, cae a `database_url`.
+    migration_database_url: str | None = None
     supabase_url: str | None = None
     supabase_anon_key: str | None = None
     supabase_service_key: str | None = None

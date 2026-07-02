@@ -25,7 +25,10 @@ if config.config_file_name is not None:
 try:
     from app.core.config import get_settings
 
-    settings_url = get_settings().database_url
+    # Alembic corre como el rol dueño (`postgres`): usa migration_database_url si
+    # está seteada, si no cae a database_url (compat con setups sin split de rol).
+    _s = get_settings()
+    settings_url = _s.migration_database_url or _s.database_url
     config.set_main_option("sqlalchemy.url", settings_url)
 except Exception:  # pragma: no cover - settings unavailable in some CI contexts
     pass
