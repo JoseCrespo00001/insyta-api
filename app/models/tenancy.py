@@ -198,6 +198,12 @@ class Message(UUIDPrimaryKeyMixin, SoftDeleteMixin, Base):
     role: Mapped[str] = mapped_column(String(16), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     content_anonymized: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Multimodal (AUD-3.4): text | audio | image | doc | location.
+    message_type: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default="text"
+    )
+    # Transcripción de audio/imagen si se procesó (para detectar multimodal ignorado).
+    media_transcript: Mapped[str | None] = mapped_column(Text, nullable=True)
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     extra: Mapped[dict | None] = mapped_column("metadata", JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
