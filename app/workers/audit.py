@@ -51,6 +51,11 @@ from app.services.reputation import (
     update_agent_spc,
     update_user_reputation,
 )
+from app.services.rubric_mapping import map_eval_to_rubric
+from app.services.rubric_scoring import compute_scores
+from app.services.segmentation import derive_segment
+from app.services.validators.cbu import find_cbus, validate_cbu
+from app.services.validators.prices import check_prices
 
 logger = logging.getLogger(__name__)
 
@@ -268,6 +273,43 @@ async def _compute_report_summary(
     return {"total": len(conv_ids), "satisfaction": buckets, "avgScore": avg}
 
 
+def _det_veto(msgs: list[dict], precios: object) -> list[str]:
+    """Flags VETO deterministas desde los mensajes del BOT: precio inventado y
+    CBU inválido dado por el agente."""
+    veto: list[str] = []
+    bot_text = " ".join(
+        m["content"] for m in msgs if m.get("role") == "assistant" and m.get("content")
+    )
+    if precios and not check_prices(bot_text, precios).ok:
+        veto.append("A1_alucinacion")
+    for m in msgs:
+        if m.get("role") == "assistant":
+            for cbu in find_cbus(m.get("content") or ""):
+                if not validate_cbu(cbu):
+                    veto.append("A5_cbu_invalido")
+    return sorted(set(veto))
+
+
+async def _persist_rubric_columns(
+    session: AsyncSession, conv_id: uuid.UUID, rubric, score, segment: str
+) -> None:
+    await session.execute(
+        update(Evaluation)
+        .where(Evaluation.conversation_id == conv_id)
+        .values(
+            rubric=rubric.model_dump(),
+            score_bruto=score.score_bruto,
+            score_final=score.score_final,
+            confidence=score.confidence,
+            has_veto=score.has_veto,
+            veto_flags=score.veto_flags,
+            segment=segment,
+            sentiment_trajectory=rubric.sentimiento_trayectoria,
+            requiere_revision_humana=rubric.requiere_revision_humana,
+        )
+    )
+
+
 def _format_source_of_truth(attached_data: dict | None) -> str | None:
     """Serializa la data adjunta del supervisor (precios.json/info.json/…) como
     un bloque de FUENTE DE VERDAD para el judge. El judge NO debe marcar como
@@ -400,31 +442,9 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
                 )
                 await _persist_conversation_eval(session, conv, parsed, usage)
                 evaluated += 1
-                # Reputación (solo en evals nuevos, para no doble-contar en re-runs).
-                is_lead = bool(parsed.resolution) and (parsed.satisfaction or 0) >= 4
-                # Fraude (determinista) sobre los mensajes del usuario.
-                fraud_flags = detect_fraud(msgs, precios=attached_precios)
-                if fraud_flags:
-                    fraud_names = fraud_flag_names(fraud_flags)
-                    for name in fraud_names:
-                        issue_counter[f"fraude:{name}"] += 1
-                await update_agent_reputation(
-                    session,
-                    agent_id=conv.agent_id,
-                    org_id=conv.org_id,
-                    project_id=conv.project_id,
-                    score=parsed.score,
-                    has_veto=False,  # VETO se cablea con la rúbrica (Fase 2/5)
-                )
-                await update_user_reputation(
-                    session,
-                    external_id=conv.external_id,
-                    org_id=conv.org_id,
-                    project_id=conv.project_id,
-                    sentiment=parsed.satisfaction,
-                    is_lead=is_lead,
-                    is_fraud=bool(fraud_flags),
-                )
+                new_parsed = parsed  # rúbrica + reputación se computan post-verdicts
+            else:
+                new_parsed = None
 
             # 2. Per-message verdicts (con objetivo + empresa + flujo).
             verdicts = await judge_messages(
@@ -469,6 +489,45 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
                 verdicts=verdicts,
                 seq_to_msg_id=seq_to_msg_id,
             )
+
+            # 3. Rúbrica + reputación (solo en evals nuevos, para no doble-contar).
+            if new_parsed is not None:
+                fraud_flags = detect_fraud(msgs, precios=attached_precios)
+                fraude_names = fraud_flag_names(fraud_flags)
+                for name in fraude_names:
+                    issue_counter[f"fraude:{name}"] += 1
+                det_veto = _det_veto(msgs, attached_precios)
+                last_turn = msgs[-1]["seq"] if msgs else 0
+                rubric = map_eval_to_rubric(
+                    new_parsed,
+                    verdicts,
+                    last_turn=last_turn,
+                    det_veto=det_veto,
+                    fraude_flags=fraude_names,
+                )
+                score = compute_scores(rubric)
+                segment = derive_segment(rubric, score)
+                await _persist_rubric_columns(session, conv_id, rubric, score, segment)
+                is_lead = (
+                    bool(new_parsed.resolution) and (new_parsed.satisfaction or 0) >= 4
+                )
+                await update_agent_reputation(
+                    session,
+                    agent_id=conv.agent_id,
+                    org_id=conv.org_id,
+                    project_id=conv.project_id,
+                    score=new_parsed.score,
+                    has_veto=score.has_veto,
+                )
+                await update_user_reputation(
+                    session,
+                    external_id=conv.external_id,
+                    org_id=conv.org_id,
+                    project_id=conv.project_id,
+                    sentiment=new_parsed.satisfaction,
+                    is_lead=is_lead,
+                    is_fraud=bool(fraud_flags),
+                )
 
     # SPC: recalcular baseline + tendencia (deriva) de cada agente auditado.
     if agent_ids:
