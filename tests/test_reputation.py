@@ -2,7 +2,23 @@
 
 from __future__ import annotations
 
-from app.services.reputation import hash_user_key, merge_avg, risk_label
+from app.services.reputation import (
+    hash_user_key,
+    merge_avg,
+    risk_label,
+    user_note,
+)
+
+
+def test_user_note_none_when_clean():
+    assert user_note(False, 0) is None
+
+
+def test_user_note_warns_when_risky():
+    note = user_note(True, 3)
+    assert note is not None
+    assert "riesgoso" in note.lower()
+    assert "3" in note
 
 
 def test_merge_avg_first_value():

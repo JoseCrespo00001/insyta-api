@@ -45,6 +45,7 @@ from app.models import (
 )
 from app.services.celery_app import celery_app
 from app.services.reputation import (
+    get_user_note,
     update_agent_reputation,
     update_user_reputation,
 )
@@ -368,6 +369,15 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
             msgs = await _load_messages(session, conv_id)
             seq_to_msg_id = {m["seq"]: m["id"] for m in msgs}
 
+            # Historial del usuario (reputación acumulada de auditorías previas):
+            # si es riesgoso, el judge lee con más suspicacia.
+            user_hist = await get_user_note(
+                session, project_id=conv.project_id, external_id=conv.external_id
+            )
+            conv_context = (
+                "\n\n".join(p for p in (eval_context, user_hist) if p) or None
+            )
+
             # 1. Conversation-level eval (skip if already present).
             existing = await session.execute(
                 select(Evaluation.id).where(Evaluation.conversation_id == conv_id)
@@ -382,7 +392,7 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
                         }
                         for m in msgs
                     ],
-                    context=eval_context,
+                    context=conv_context,
                 )
                 await _persist_conversation_eval(session, conv, parsed, usage)
                 evaluated += 1
@@ -418,6 +428,7 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
                     for p in (
                         f"Empresa: {company_context}" if company_context else "",
                         source_of_truth or "",
+                        user_hist or "",
                         f"Flujo esperado:\n{flow_summary}" if flow_summary else "",
                     )
                     if p

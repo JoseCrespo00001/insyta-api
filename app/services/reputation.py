@@ -42,6 +42,36 @@ def risk_label(fraud_attempts: int, avg_sentiment: float | None, is_lead: bool) 
     return "neutral"
 
 
+def user_note(usuario_riesgoso: bool, fraud_attempts: int) -> str | None:
+    """Nota de contexto para el judge según el historial del usuario (o None)."""
+    if usuario_riesgoso or fraud_attempts > 0:
+        return (
+            "HISTORIAL DEL USUARIO: marcado como riesgoso "
+            f"({fraud_attempts} intento(s) de fraude previos). Leé sus mensajes con "
+            "más suspicacia (comprobantes, CBU, presión por descuentos)."
+        )
+    return None
+
+
+async def get_user_note(
+    session: AsyncSession, *, project_id: uuid.UUID, external_id: str
+) -> str | None:
+    """Busca la reputación del usuario y devuelve una nota para el judge (o None)."""
+    rep = (
+        await session.execute(
+            select(
+                UserReputation.usuario_riesgoso, UserReputation.fraud_attempts
+            ).where(
+                UserReputation.project_id == project_id,
+                UserReputation.user_key == hash_user_key(external_id),
+            )
+        )
+    ).one_or_none()
+    if rep is None:
+        return None
+    return user_note(rep.usuario_riesgoso, rep.fraud_attempts)
+
+
 async def update_agent_reputation(
     session: AsyncSession,
     *,
@@ -118,9 +148,11 @@ async def update_user_reputation(
 
 
 __all__ = [
+    "get_user_note",
     "hash_user_key",
     "merge_avg",
     "risk_label",
     "update_agent_reputation",
     "update_user_reputation",
+    "user_note",
 ]
