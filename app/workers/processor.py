@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import uuid
 from collections.abc import Iterable
 from datetime import datetime, timezone
@@ -78,6 +79,23 @@ async def _load_upload_blob(
         "whatsapp" if meta["filename"].lower().endswith(".txt") else DEFAULT_PLATFORM
     )
     return csv_bytes, platform, meta
+
+
+_PHONE_RE = re.compile(r"^\+?\d[\d\s().-]{6,18}\d$")
+
+
+def _phone_from_external(external_id: str | None) -> str | None:
+    """Devuelve un teléfono normalizado si el external_id tiene pinta de número
+    (caso típico WhatsApp), si no None. Solo dígitos + '+' inicial opcional."""
+    if not external_id:
+        return None
+    raw = external_id.strip()
+    if not _PHONE_RE.match(raw):
+        return None
+    digits = re.sub(r"\D", "", raw)
+    if not 8 <= len(digits) <= 15:
+        return None
+    return f"+{digits}" if raw.startswith("+") else digits
 
 
 def _preview(messages: Iterable) -> str:
@@ -154,6 +172,11 @@ async def process_conversations(
                     "message_count": len(msgs),
                     "status": "completed",
                     "contact_name": dto.contact_name,
+                    # Identificador de usuario para CSV/campaña y reputación.
+                    # Si el parser no lo trajo, derivamos del external_id cuando
+                    # tiene pinta de teléfono (WhatsApp: el external_id ES el número).
+                    "contact_phone": dto.contact_phone
+                    or _phone_from_external(dto.external_id),
                     "ended_at": msgs[-1].timestamp if msgs else None,
                 },
             )

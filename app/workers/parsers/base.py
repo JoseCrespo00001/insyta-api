@@ -21,6 +21,7 @@ class ConversationDTO:
     platform: str
     started_at: datetime | None = None
     contact_name: str | None = None
+    contact_phone: str | None = None
     messages: list[MessageDTO] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
