@@ -22,14 +22,14 @@ import uuid
 from collections.abc import Iterable
 from datetime import datetime, timezone
 
-from sqlalchemy import update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import undefer
 
 from app.core.db import engine, tenant_txn
 from app.models import Message, Upload
 from app.services.celery_app import celery_app
 from app.services.idempotency import upsert_conversation_idempotent
-from app.services.uploads_storage import read_upload
 from app.workers.parsers import ConversationDTO, get_parser
 
 logger = logging.getLogger(__name__)
@@ -47,22 +47,31 @@ async def _load_upload_blob(
     `uploads` row is visible even on Supabase (FORCE RLS, non-superuser role).
     """
     async with tenant_txn(org_id) as session:
-        upload = await session.get(Upload, upload_id)
+        # undefer(raw_content): la columna es deferred (no se trae en los selects
+        # de status), pero acá SÍ necesitamos los bytes del CSV.
+        upload = (
+            await session.execute(
+                select(Upload)
+                .where(Upload.id == upload_id)
+                .options(undefer(Upload.raw_content))
+            )
+        ).scalar_one_or_none()
         if upload is None:
             raise ValueError(f"upload {upload_id} not found")
         if upload.agent_id is None:
             raise ValueError(f"upload {upload_id} has no agent_id")
+        if upload.raw_content is None:
+            raise ValueError(
+                f"upload {upload_id} has no raw_content (CSV vacío o ya limpiado)"
+            )
+        csv_bytes = bytes(upload.raw_content)
         meta = {
             "project_id": str(upload.project_id),
             "org_id": str(upload.org_id),
             "agent_id": str(upload.agent_id),
             "upload_id": str(upload.id),
-            "storage_path": upload.storage_path,
             "filename": upload.filename or "",
         }
-    # Baja los bytes de Supabase Storage por su object key (antes: disco local,
-    # que se rompía entre contenedores web/worker).
-    csv_bytes = await read_upload(meta["storage_path"])
     # WhatsApp export (.txt) vs CSV canónico (custom_sdk).
     platform = (
         "whatsapp" if meta["filename"].lower().endswith(".txt") else DEFAULT_PLATFORM
@@ -216,6 +225,8 @@ async def _run(upload_id: uuid.UUID, org_id: uuid.UUID) -> dict:
         rows_processed=summary["new_conversations"]
         + summary["duplicate_conversations"],
         finished_at=datetime.now(timezone.utc),
+        # Limpia el CSV crudo: ya se procesó, no hace falta guardar el blob.
+        raw_content=None,
     )
 
     summary["upload_id"] = str(upload_id)

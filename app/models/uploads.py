@@ -17,6 +17,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     String,
     Text,
 )
@@ -47,7 +48,15 @@ class Upload(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
         nullable=True,
     )
     filename: Mapped[str] = mapped_column(String(256), nullable=False)
-    storage_path: Mapped[str] = mapped_column(String(512), nullable=False)
+    # Legacy: path del CSV cuando se guardaba en disco/Storage. Hoy el CSV vive
+    # en `raw_content` (Supabase Postgres), así que es nullable.
+    storage_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    # Bytes crudos del CSV. deferred: no se cargan en los selects de status/lista
+    # (evita traer el blob en cada poll). El worker los lee con undefer y los
+    # limpia (NULL) al terminar de procesar para no inflar la tabla.
+    raw_content: Mapped[bytes | None] = mapped_column(
+        LargeBinary, nullable=True, deferred=True
+    )
     size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
     rows_total: Mapped[int | None] = mapped_column(Integer, nullable=True)

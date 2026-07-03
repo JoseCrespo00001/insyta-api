@@ -14,7 +14,6 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.services.uploads_storage import write_upload
 from app.workers import processor
 
 TEST_DATABASE_URL = os.getenv(
@@ -91,8 +90,8 @@ async def test_run_creates_conversations_and_messages(monkeypatch):
             await s.execute(
                 text(
                     "INSERT INTO uploads(id, public_id, org_id, project_id, agent_id, "
-                    "filename, storage_path, size_bytes, status) "
-                    "VALUES (:id, :pid, :org, :proj, :agent, 'demo.csv', :path, :sz, 'pending')"
+                    "filename, raw_content, size_bytes, status) "
+                    "VALUES (:id, :pid, :org, :proj, :agent, 'demo.csv', :raw, :sz, 'pending')"
                 ),
                 {
                     "id": upload_id,
@@ -100,7 +99,7 @@ async def test_run_creates_conversations_and_messages(monkeypatch):
                     "org": org_id,
                     "proj": proj_id,
                     "agent": agent_id,
-                    "path": write_upload(upload_id, CSV_PATH.read_bytes()),
+                    "raw": CSV_PATH.read_bytes(),
                     "sz": CSV_PATH.stat().st_size,
                 },
             )

@@ -32,7 +32,6 @@ from app.core.db import get_db_with_tenant_context
 from app.models import Agent, Project, Upload
 from app.services.celery_app import celery_app
 from app.services.soft_delete import soft_delete_upload
-from app.services.uploads_storage import write_upload
 
 logger = logging.getLogger(__name__)
 
@@ -120,8 +119,9 @@ async def create_upload(
 
     upload_id = uuid.uuid4()
     public_id = f"upl_{upload_id.hex[:24]}"
-    storage_path = await write_upload(upload_id, content)
 
+    # El CSV crudo se guarda en la propia fila (Supabase Postgres), no en disco
+    # ni Storage. El worker lo lee de raw_content y lo limpia al terminar.
     upload = Upload(
         id=upload_id,
         public_id=public_id,
@@ -129,7 +129,7 @@ async def create_upload(
         project_id=project_id,
         agent_id=agent_id,
         filename=file.filename,
-        storage_path=storage_path,
+        raw_content=content,
         size_bytes=len(content),
         status="pending",
     )
