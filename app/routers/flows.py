@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.auth import CurrentUser, get_current_user
 from app.core.db import get_db_with_tenant_context
 from app.models import Flow, FlowVersion, Organization, Project
+from app.services.soft_delete import soft_delete_flow
 
 logger = logging.getLogger(__name__)
 
@@ -295,8 +296,9 @@ async def delete_flow(
     ).scalar_one_or_none()
     if flow is None:
         raise HTTPException(status_code=404, detail="Flow not found")
-    await session.delete(flow)
-    await session.flush()
+    # Soft-delete: setea is_deleted=True en el flow, sus versiones y sus mejoras.
+    await soft_delete_flow(session, flow.id)
+    await session.commit()
 
 
 # ── Historial de versiones del flujo ────────────────────────────────────────

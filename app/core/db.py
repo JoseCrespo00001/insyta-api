@@ -17,16 +17,18 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import Depends
-from sqlalchemy import text
+from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
     async_sessionmaker,
     create_async_engine,
 )
+from sqlalchemy.orm import ORMExecuteState, Session, with_loader_criteria
 
 from app.core.auth import CurrentUser, get_current_user
 from app.core.config import get_settings
+from app.models.base import SoftDeleteMixin
 
 
 def _build_engine() -> AsyncEngine:
@@ -48,6 +50,34 @@ engine: AsyncEngine = _build_engine()
 async_session_factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
     engine, expire_on_commit=False, class_=AsyncSession
 )
+
+
+@event.listens_for(Session, "do_orm_execute")
+def _filter_soft_deleted(state: ORMExecuteState) -> None:
+    """Soft-delete global: agrega `is_deleted = False` a todo SELECT ORM sobre
+    cualquier modelo que herede de `SoftDeleteMixin`, así ninguna lectura
+    devuelve filas borradas lógicamente sin tener que tocar los ~40 sitios de
+    query a mano.
+
+    Opt-out por query con `.execution_options(include_deleted=True)` para casos
+    internos que sí necesitan ver todo (upsert idempotente, el propio
+    soft-delete, jobs de mantenimiento). No aplica a UPDATE/DELETE ni a joins
+    externos con agregados (esos se filtran explícitamente en el ON clause).
+    """
+    if not state.is_select:
+        return
+    if state.is_column_load or state.is_relationship_load:
+        # cargas de relaciones/refresh de columnas: no re-aplicar el criterio
+        return
+    if state.execution_options.get("include_deleted", False):
+        return
+    state.statement = state.statement.options(
+        with_loader_criteria(
+            SoftDeleteMixin,
+            lambda cls: cls.is_deleted.is_(False),
+            include_aliases=True,
+        )
+    )
 
 
 async def get_db() -> AsyncIterator[AsyncSession]:

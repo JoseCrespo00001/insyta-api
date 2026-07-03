@@ -26,10 +26,10 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
+from app.models.base import Base, SoftDeleteMixin, TimestampMixin, UUIDPrimaryKeyMixin
 
 
-class Audit(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+class Audit(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
     __tablename__ = "audits"
 
     public_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
@@ -77,7 +77,7 @@ class Audit(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
 
 
-class AuditConversation(UUIDPrimaryKeyMixin, Base):
+class AuditConversation(UUIDPrimaryKeyMixin, SoftDeleteMixin, Base):
     __tablename__ = "audit_conversations"
 
     audit_id: Mapped[uuid.UUID] = mapped_column(
@@ -113,7 +113,7 @@ class AuditConversation(UUIDPrimaryKeyMixin, Base):
     )
 
 
-class MessageEvaluation(UUIDPrimaryKeyMixin, Base):
+class MessageEvaluation(UUIDPrimaryKeyMixin, SoftDeleteMixin, Base):
     """Per-message verdict from the judge (the 'reporte por mensaje')."""
 
     __tablename__ = "message_evaluations"

@@ -17,7 +17,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import delete, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
@@ -30,6 +30,7 @@ from app.models import (
     Upload,
 )
 from app.services.report_format import eval_to_camel
+from app.services.soft_delete import soft_delete_conversations
 
 logger = logging.getLogger(__name__)
 
@@ -358,7 +359,8 @@ async def delete_conversation(
     conversation_public_id: str,
     session: AsyncSession = Depends(get_db_with_tenant_context),
 ) -> None:
-    """Borra una conversación. Mensajes, evaluations y verdicts caen por FK CASCADE."""
+    """Soft-delete de una conversación: setea is_deleted=True en la conversación
+    y sus hijos (mensajes, evaluations, verdicts). No borra filas."""
     conv_id = (
         await session.execute(
             select(Conversation.id).where(
@@ -368,5 +370,5 @@ async def delete_conversation(
     ).scalar_one_or_none()
     if conv_id is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
-    await session.execute(delete(Conversation).where(Conversation.id == conv_id))
+    await soft_delete_conversations(session, [conv_id])
     await session.commit()

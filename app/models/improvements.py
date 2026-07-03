@@ -20,10 +20,10 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
+from app.models.base import Base, SoftDeleteMixin, TimestampMixin, UUIDPrimaryKeyMixin
 
 
-class Improvement(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+class Improvement(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
     __tablename__ = "improvements"
 
     public_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
@@ -67,7 +67,7 @@ class Improvement(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
 
 
-class ImprovementConversation(UUIDPrimaryKeyMixin, Base):
+class ImprovementConversation(UUIDPrimaryKeyMixin, SoftDeleteMixin, Base):
     __tablename__ = "improvement_conversations"
 
     improvement_id: Mapped[uuid.UUID] = mapped_column(

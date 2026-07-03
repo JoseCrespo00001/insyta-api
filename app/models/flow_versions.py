@@ -25,14 +25,14 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
+from app.models.base import Base, SoftDeleteMixin, TimestampMixin, UUIDPrimaryKeyMixin
 
 # initial=primera carga · improvement=mejora aplicada · manual=edición a mano
 # · restore=se volvió a una versión pasada · upload=re-subida del JSON
 FLOW_VERSION_SOURCES = ("initial", "improvement", "manual", "restore", "upload")
 
 
-class FlowVersion(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+class FlowVersion(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
     __tablename__ = "flow_versions"
 
     public_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)

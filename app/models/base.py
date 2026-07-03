@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, MetaData, func
+from sqlalchemy import Boolean, DateTime, MetaData, false, func
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, declared_attr, mapped_column
 
@@ -31,6 +31,28 @@ class TimestampMixin:
         server_default=func.now(),
         onupdate=func.now(),
         nullable=False,
+    )
+
+
+class SoftDeleteMixin:
+    """Borrado lógico: los endpoints DELETE setean `is_deleted=True` en vez de
+    borrar la fila, y todas las lecturas filtran `is_deleted == False`.
+
+    Independiente de `TimestampMixin` a propósito: varios modelos
+    (Conversation, Message, AuditConversation, ...) no tienen `updated_at`, así
+    que este mixin se puede aplicar solo.
+    """
+
+    is_deleted: Mapped[bool] = mapped_column(
+        Boolean,
+        server_default=false(),
+        nullable=False,
+        default=False,
+        index=True,
+    )
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
     )
 
 
