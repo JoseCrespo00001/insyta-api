@@ -48,6 +48,9 @@ Para cada conversacion, devolve un objeto JSON con estos campos exactos:
    cortesia. Penaliza objetivos no cumplidos y desvios del flujo; premia cuando
    el bot logra el objetivo del negocio (ej: si el objetivo es recaudar datos,
    evalua si pidio y obtuvo los datos; si es vender, si avanzo la venta).
+5. Si el CONTEXTO trae un bloque "FUENTE DE VERDAD" (precios, stock, plazos,
+   etc.), tratá como CORRECTO todo dato del bot que coincide con esa fuente; no
+   bajes el score por datos correctos. Penaliza solo datos que la contradicen.
 
 # Ejemplo de output valido
 

@@ -15,6 +15,7 @@ Without a provider key the judge raises FatalLLMError; the audit is marked
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import uuid
 from collections import Counter
@@ -40,6 +41,7 @@ from app.models import (
     MessageEvaluation,
     Organization,
     Project,
+    Supervisor,
 )
 from app.services.celery_app import celery_app
 
@@ -259,6 +261,31 @@ async def _compute_report_summary(
     return {"total": len(conv_ids), "satisfaction": buckets, "avgScore": avg}
 
 
+def _format_source_of_truth(attached_data: dict | None) -> str | None:
+    """Serializa la data adjunta del supervisor (precios.json/info.json/…) como
+    un bloque de FUENTE DE VERDAD para el judge. El judge NO debe marcar como
+    alucinación lo que coincide con estos datos."""
+    if not attached_data:
+        return None
+    parts: list[str] = []
+    for key in sorted(attached_data.keys()):
+        value = attached_data[key]
+        try:
+            rendered = json.dumps(value, ensure_ascii=False, indent=2)[:4000]
+        except (TypeError, ValueError):
+            rendered = str(value)[:4000]
+        parts.append(f"[{key}]\n{rendered}")
+    if not parts:
+        return None
+    return (
+        "FUENTE DE VERDAD (datos autoritativos del negocio — verificá precios, "
+        "stock, plazos y datos contra esto; NO marques como alucinación lo que "
+        "coincide con estos datos; solo marcá alucinación si el bot afirma algo "
+        "que CONTRADICE o que NO está respaldado por esta fuente ni por el flujo):\n"
+        + "\n\n".join(parts)
+    )
+
+
 async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
     async with tenant_txn(org_id) as session:
         audit, conv_ids = await _load_audit_conversations(session, audit_id)
@@ -272,12 +299,29 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
         org = await session.get(Organization, org_id)
         org_key_enc = org.anthropic_api_key_encrypted if org else None
         org_ds_enc = org.deepseek_api_key_encrypted if org else None
-        # Contexto para el judge: objetivo de campaña + datos de empresa + flujo.
+        # Contexto para el judge: objetivo + knowledge/fuente de verdad + flujo.
+        # El Supervisor (si la auditoría lo eligió) es el cerebro: aporta
+        # knowledge_base + attached_data (fuente de verdad) y puede aportar el flow.
+        supervisor = (
+            await session.get(Supervisor, audit.supervisor_id)
+            if audit.supervisor_id
+            else None
+        )
         project = await session.get(Project, project_id)
-        company_context = project.company_context if project else None
+        # knowledge del supervisor pisa el company_context legacy del proyecto.
+        company_context = (
+            supervisor.knowledge_base
+            if supervisor and supervisor.knowledge_base
+            else None
+        ) or (project.company_context if project else None)
+        source_of_truth = _format_source_of_truth(
+            supervisor.attached_data if supervisor else None
+        )
+        # El flow puede venir del supervisor si la auditoría no fijó uno propio.
+        effective_flow_id = flow_id or (supervisor.flow_id if supervisor else None)
         flow_summary = None
-        if flow_id is not None:
-            flow = await session.get(Flow, flow_id)
+        if effective_flow_id is not None:
+            flow = await session.get(Flow, effective_flow_id)
             if flow is not None and flow.flow_json:
                 flow_summary = summarize_flow(flow.flow_json)[:2500]
 
@@ -287,6 +331,8 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
         ctx_parts.append(f"OBJETIVO DE LA CAMPAÑA: {objective_label}")
     if company_context:
         ctx_parts.append(f"DATOS DE LA EMPRESA:\n{company_context}")
+    if source_of_truth:
+        ctx_parts.append(source_of_truth)
     if flow_summary:
         ctx_parts.append(
             f"FLUJO ESPERADO (lo que el agente debería hacer):\n{flow_summary}"
@@ -348,6 +394,7 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
                     p
                     for p in (
                         f"Empresa: {company_context}" if company_context else "",
+                        source_of_truth or "",
                         f"Flujo esperado:\n{flow_summary}" if flow_summary else "",
                     )
                     if p
