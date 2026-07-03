@@ -14,13 +14,14 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
-from sqlalchemy import delete, func, select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import CurrentUser, get_current_user
 from app.core.db import get_db_with_tenant_context
 from app.models import Agent, Conversation, Evaluation, Project
+from app.services.soft_delete import soft_delete_project
 
 logger = logging.getLogger(__name__)
 
@@ -157,8 +158,9 @@ async def delete_project(
     project_public_id: str,
     session: AsyncSession = Depends(get_db_with_tenant_context),
 ) -> None:
-    """Borra el proyecto y todo lo suyo (agentes, conversaciones, flujos,
-    auditorías, uploads, mejoras) por FK CASCADE."""
+    """Soft-delete del proyecto y todo lo suyo (agentes, conversaciones, flujos,
+    auditorías, uploads, mejoras): setea is_deleted=True en toda la cascada. No
+    borra filas — la data queda en la DB y las lecturas la filtran."""
     project_id = (
         await session.execute(
             select(Project.id).where(Project.public_id == project_public_id)
@@ -166,7 +168,7 @@ async def delete_project(
     ).scalar_one_or_none()
     if project_id is None:
         raise HTTPException(status_code=404, detail="Project not found")
-    await session.execute(delete(Project).where(Project.id == project_id))
+    await soft_delete_project(session, project_id)
     await session.commit()
 
 

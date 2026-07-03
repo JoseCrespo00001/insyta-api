@@ -1,79 +1,112 @@
-"""Tests para services/uploads_storage.py — persistencia de CSVs subidos.
+"""Tests para services/uploads_storage.py — persistencia de CSVs en Supabase Storage.
 
-Módulo de I/O que estaba 0% cubierto (audit 2026-06-24). Prueba el happy-path
-(roundtrip a disco) y los error-paths de filesystem.
+Antes escribía a disco local (se rompía entre contenedores web/worker); ahora
+sube/baja de un bucket privado de Supabase Storage. Estos tests mockean el
+cliente Supabase y prueban el roundtrip write→read→delete + el error-path de
+credenciales faltantes.
 """
 
 from __future__ import annotations
 
 import uuid
-from pathlib import Path
 
 import pytest
 
 from app.services import uploads_storage
-from app.services.uploads_storage import write_upload
+from app.services.uploads_storage import (
+    delete_upload_blob,
+    read_upload,
+    write_upload,
+)
+
+
+class _FakeBucket:
+    def __init__(self, store: dict[str, bytes]) -> None:
+        self.store = store
+
+    def upload(self, path, file, file_options=None):
+        self.store[path] = file
+
+    def download(self, path):
+        return self.store[path]
+
+    def remove(self, paths):
+        for p in paths:
+            self.store.pop(p, None)
+        return []
+
+
+class _FakeStorage:
+    def __init__(self, store: dict[str, bytes]) -> None:
+        self.store = store
+
+    def from_(self, bucket: str):
+        return _FakeBucket(self.store)
+
+
+class _FakeClient:
+    def __init__(self, store: dict[str, bytes]) -> None:
+        self.storage = _FakeStorage(store)
 
 
 @pytest.fixture
-def tmp_upload_dir(tmp_path: Path, monkeypatch):
-    """Redirige UPLOAD_DIR a un tmp aislado por test."""
-    target = tmp_path / "uploads"
-    monkeypatch.setattr(uploads_storage, "UPLOAD_DIR", target)
-    return target
+def fake_storage(monkeypatch):
+    """Reemplaza el cliente Supabase por uno en memoria (dict key->bytes)."""
+    store: dict[str, bytes] = {}
+    monkeypatch.setattr(uploads_storage, "_client", lambda: _FakeClient(store))
+    return store
 
 
 class TestWriteUpload:
-    def test_writes_content_and_returns_readable_path(self, tmp_upload_dir):
+    async def test_returns_key_keyed_by_upload_id(self, fake_storage):
+        upload_id = uuid.uuid4()
+        key = await write_upload(upload_id, b"data")
+        assert key == f"{upload_id}.csv"
+
+    async def test_uploads_content_to_bucket(self, fake_storage):
         upload_id = uuid.uuid4()
         content = b"role,content\nuser,hola\nagent,buenas"
-        path_str = write_upload(upload_id, content)
+        key = await write_upload(upload_id, content)
+        assert fake_storage[key] == content
 
-        path = Path(path_str)
-        assert path.exists()
-        assert path.read_bytes() == content
+    async def test_handles_empty_content(self, fake_storage):
+        key = await write_upload(uuid.uuid4(), b"")
+        assert fake_storage[key] == b""
 
-    def test_path_is_keyed_by_upload_id(self, tmp_upload_dir):
+    async def test_overwrites_same_upload_id(self, fake_storage):
         upload_id = uuid.uuid4()
-        path_str = write_upload(upload_id, b"x")
-        assert str(upload_id) in path_str
-        assert path_str.endswith(".csv")
+        await write_upload(upload_id, b"first")
+        key = await write_upload(upload_id, b"second")
+        assert fake_storage[key] == b"second"
 
-    def test_creates_dir_if_missing(self, tmp_upload_dir):
-        assert not tmp_upload_dir.exists()
-        write_upload(uuid.uuid4(), b"data")
-        assert tmp_upload_dir.is_dir()
 
-    def test_overwrites_same_upload_id(self, tmp_upload_dir):
+class TestRoundtrip:
+    async def test_write_then_read_returns_same_bytes(self, fake_storage):
         upload_id = uuid.uuid4()
-        write_upload(upload_id, b"first")
-        path_str = write_upload(upload_id, b"second")
-        assert Path(path_str).read_bytes() == b"second"
+        content = b"conversation_id,role,content,timestamp\n1,user,hola,2026-01-01"
+        key = await write_upload(upload_id, content)
+        assert await read_upload(key) == content
 
-    def test_handles_empty_content(self, tmp_upload_dir):
-        path_str = write_upload(uuid.uuid4(), b"")
-        assert Path(path_str).read_bytes() == b""
+    async def test_delete_removes_blob(self, fake_storage):
+        upload_id = uuid.uuid4()
+        key = await write_upload(upload_id, b"x")
+        await delete_upload_blob(key)
+        with pytest.raises(KeyError):
+            await read_upload(key)
 
 
 class TestErrorPaths:
-    def test_raises_when_target_dir_path_is_a_file(self, tmp_path: Path, monkeypatch):
-        """Si UPLOAD_DIR apunta a un archivo existente, mkdir falla en vez de
-        escribir silenciosamente en el lugar equivocado."""
-        a_file = tmp_path / "not-a-dir"
-        a_file.write_text("soy un archivo")
-        monkeypatch.setattr(uploads_storage, "UPLOAD_DIR", a_file)
+    async def test_raises_when_supabase_not_configured(self, monkeypatch):
+        """Sin SUPABASE_URL / SERVICE_KEY el cliente falla claro, no silencioso."""
+        uploads_storage._client.cache_clear()
 
-        with pytest.raises((FileExistsError, NotADirectoryError, OSError)):
-            write_upload(uuid.uuid4(), b"data")
+        class _NoCreds:
+            supabase_url = None
+            supabase_service_key = None
 
-    def test_raises_on_unwritable_parent(self, tmp_path: Path, monkeypatch):
-        """Directorio padre sin permiso de escritura → OSError, no swallow."""
-        ro_parent = tmp_path / "readonly"
-        ro_parent.mkdir()
-        ro_parent.chmod(0o500)  # r-x: no se puede crear el subdir uploads/
-        monkeypatch.setattr(uploads_storage, "UPLOAD_DIR", ro_parent / "uploads")
+        monkeypatch.setattr(uploads_storage, "get_settings", lambda: _NoCreds())
         try:
-            with pytest.raises(OSError):
-                write_upload(uuid.uuid4(), b"data")
+            with pytest.raises(RuntimeError):
+                uploads_storage._client()
         finally:
-            ro_parent.chmod(0o700)  # restaurar para que pytest limpie el tmp
+            uploads_storage._client.cache_clear()

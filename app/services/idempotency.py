@@ -84,11 +84,16 @@ async def upsert_conversation_idempotent(
         assert row is not None  # just inserted
         return row, True
 
+    # Re-select del row existente en el path de conflicto. include_deleted=True
+    # para no romper si esa conversación fue soft-deleted: por el unique
+    # constraint no se puede re-insertar, así que devolvemos la existente.
     existing = await session.execute(
-        select(Conversation).where(
+        select(Conversation)
+        .where(
             Conversation.agent_id == agent_id,
             Conversation.external_id == external_id,
         )
+        .execution_options(include_deleted=True)
     )
     row = existing.scalar_one()
     logger.info(

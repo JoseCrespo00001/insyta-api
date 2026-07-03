@@ -27,7 +27,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
+from app.models.base import Base, SoftDeleteMixin, TimestampMixin, UUIDPrimaryKeyMixin
 
 
 class Organization(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -57,7 +57,7 @@ class Organization(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
 
 
-class Project(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+class Project(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
     __tablename__ = "projects"
 
     public_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
@@ -82,7 +82,7 @@ class Project(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
 
 
-class Agent(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+class Agent(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
     __tablename__ = "agents"
 
     public_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
@@ -112,7 +112,7 @@ class Agent(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
 
 
-class Conversation(UUIDPrimaryKeyMixin, Base):
+class Conversation(UUIDPrimaryKeyMixin, SoftDeleteMixin, Base):
     __tablename__ = "conversations"
 
     public_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
@@ -175,7 +175,7 @@ class Conversation(UUIDPrimaryKeyMixin, Base):
     )
 
 
-class Message(UUIDPrimaryKeyMixin, Base):
+class Message(UUIDPrimaryKeyMixin, SoftDeleteMixin, Base):
     __tablename__ = "messages"
 
     public_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
@@ -212,7 +212,7 @@ class Message(UUIDPrimaryKeyMixin, Base):
     )
 
 
-class Evaluation(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+class Evaluation(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
     __tablename__ = "evaluations"
 
     public_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)

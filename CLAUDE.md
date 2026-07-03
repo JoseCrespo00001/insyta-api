@@ -87,9 +87,29 @@ uv run python scripts/audit_bpmn_coverage.py   # BPMN audit: endpoints vs BPMN t
 Run tests from **this dir**, not repo root, to keep them scoped and avoid timeouts.
 ruff line-length = 100. mypy en strict.
 
+## Soft-delete (regla dura)
+
+- **Nunca `DROP`/`TRUNCATE`/reset de la base ni de una tabla.** La DB de prod no se borra ni se
+  reinicia jamás. Migraciones **solo aditivas/reversibles** (no destructivas).
+- **Delete = soft-delete.** Los endpoints DELETE setean `is_deleted=True` (+ `deleted_at`), nunca
+  borran filas. Cascada replicada en `app/services/soft_delete.py` (`soft_delete_project/_conversations/_upload/_flow`).
+- **Toda lectura filtra `is_deleted = False`.** Se aplica global con un evento `do_orm_execute` +
+  `with_loader_criteria` en `app/core/db.py` (cubre selects de entidad, agregados y outer joins).
+  Para ver filas borradas a propósito (upsert idempotente, el propio soft-delete, mantenimiento):
+  `.execution_options(include_deleted=True)`.
+- Modelos borrables llevan `SoftDeleteMixin` (`app/models/base.py`). `Organization`/`User` NO.
+
+## Uploads (storage)
+
+- El CSV subido va a **Supabase Storage** (bucket privado `uploads`), no a disco local. Helpers en
+  `app/services/uploads_storage.py` (`write_upload`/`read_upload`/`delete_upload_blob`). El worker lo
+  baja por la object key en `uploads.storage_path`. Requiere `SUPABASE_URL` + `SUPABASE_SERVICE_KEY`.
+
 ## Don'ts
 
 - Don't bypass RLS, don't log raw PII.
 - Don't call Anthropic/OpenAI/DeepSeek outside `app/llm/` clients.
 - Don't reintroducir webhooks/SSE/alerts/Beat ad hoc — si los traés, es un vertical slice que
   sigue su ADR (0001/0003/0004/0005).
+- Don't borrar/reiniciar la DB ni escribir migraciones destructivas (ver Soft-delete arriba).
+- Don't volver a persistir uploads en disco local (usar Supabase Storage).

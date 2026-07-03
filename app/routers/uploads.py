@@ -24,13 +24,14 @@ from fastapi import (
     status,
 )
 from pydantic import BaseModel, Field
-from sqlalchemy import delete, func, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import CurrentUser, get_current_user
 from app.core.db import get_db_with_tenant_context
-from app.models import Agent, Conversation, Project, Upload
+from app.models import Agent, Project, Upload
 from app.services.celery_app import celery_app
+from app.services.soft_delete import soft_delete_upload
 from app.services.uploads_storage import write_upload
 
 logger = logging.getLogger(__name__)
@@ -119,7 +120,7 @@ async def create_upload(
 
     upload_id = uuid.uuid4()
     public_id = f"upl_{upload_id.hex[:24]}"
-    storage_path = write_upload(upload_id, content)
+    storage_path = await write_upload(upload_id, content)
 
     upload = Upload(
         id=upload_id,
@@ -258,26 +259,16 @@ async def delete_upload(
     upload_public_id: str,
     session: AsyncSession = Depends(get_db_with_tenant_context),
 ) -> None:
-    """Borra un CSV completo: sus conversaciones (cascada de mensajes/evals) +
-    la fila del upload + el archivo en disco."""
+    """Soft-delete de un CSV completo: setea is_deleted=True en el upload y en
+    sus conversaciones (con mensajes/evals). No borra filas ni el objeto del
+    bucket — la data queda en la DB y las lecturas la filtran."""
     row = (
         await session.execute(
-            select(Upload.id, Upload.storage_path).where(
-                Upload.public_id == upload_public_id
-            )
+            select(Upload.id).where(Upload.public_id == upload_public_id)
         )
     ).one_or_none()
     if row is None:
         raise HTTPException(status_code=404, detail="Upload not found")
 
-    await session.execute(delete(Conversation).where(Conversation.upload_id == row.id))
-    await session.execute(delete(Upload).where(Upload.id == row.id))
+    await soft_delete_upload(session, row.id)
     await session.commit()
-
-    # Mejor esfuerzo: borrar el archivo del storage.
-    if row.storage_path:
-        import contextlib
-        import os
-
-        with contextlib.suppress(OSError):
-            os.remove(row.storage_path)

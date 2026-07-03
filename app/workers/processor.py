@@ -29,6 +29,7 @@ from app.core.db import engine, tenant_txn
 from app.models import Message, Upload
 from app.services.celery_app import celery_app
 from app.services.idempotency import upsert_conversation_idempotent
+from app.services.uploads_storage import read_upload
 from app.workers.parsers import ConversationDTO, get_parser
 
 logger = logging.getLogger(__name__)
@@ -59,8 +60,9 @@ async def _load_upload_blob(
             "storage_path": upload.storage_path,
             "filename": upload.filename or "",
         }
-    with open(meta["storage_path"], "rb") as fh:
-        csv_bytes = fh.read()
+    # Baja los bytes de Supabase Storage por su object key (antes: disco local,
+    # que se rompía entre contenedores web/worker).
+    csv_bytes = await read_upload(meta["storage_path"])
     # WhatsApp export (.txt) vs CSV canónico (custom_sdk).
     platform = (
         "whatsapp" if meta["filename"].lower().endswith(".txt") else DEFAULT_PLATFORM
@@ -226,6 +228,24 @@ async def _run_and_dispose(upload_id: uuid.UUID, org_id: uuid.UUID) -> dict:
     # at the end so pooled asyncpg connections don't leak across loops.
     try:
         return await _run(upload_id, org_id)
+    except Exception as exc:
+        # Sin este handler, cualquier excepción antes de marcar "processing"
+        # (p.ej. el CSV no está en Storage) dejaba el upload pegado en "pending"
+        # para siempre. Marcamos "failed" con el error y re-lanzamos para que
+        # Celery lo registre como FAILURE.
+        logger.exception("[UPLOADS] process_upload falló upload=%s", upload_id)
+        try:
+            await _set_upload_status(
+                upload_id,
+                org_id,
+                status="failed",
+                error_message=str(exc)[:1000],
+                finished_at=datetime.now(timezone.utc),
+            )
+        except Exception:
+            # No ocultar el error original si el UPDATE de status también falla.
+            logger.exception("[UPLOADS] no se pudo marcar failed upload=%s", upload_id)
+        raise
     finally:
         await engine.dispose()
 

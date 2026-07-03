@@ -1,31 +1,74 @@
-"""Persist uploaded CSVs to disk under /tmp.
+"""Persistencia de CSVs subidos en Supabase Storage (bucket privado).
 
-Supabase Storage integration lands in Sprint 2; until then we write to a local
-directory keyed by upload_id so the worker can re-read it without depending on
-the request lifetime. The path is returned for the `uploads.storage_path`
-column.
+El contenedor `web` sube el CSV crudo a un bucket privado de Supabase Storage y
+guarda la object key en `uploads.storage_path`. El worker de Celery (contenedor
+separado) lo baja por esa key. Esto elimina la dependencia previa del disco
+local, que se rompía entre contenedores porque `web` y `worker` no comparten
+filesystem.
+
+Se usa el service-role key (`SUPABASE_SERVICE_KEY`), que bypassa las policies de
+Storage — el bucket debe crearse como privado en el proyecto de Supabase.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
-import os
 import uuid
-from pathlib import Path
+from functools import lru_cache
+
+from app.core.config import get_settings
+from supabase import Client, create_client
 
 logger = logging.getLogger(__name__)
 
-UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "/tmp/insyta-uploads"))
+UPLOAD_BUCKET = "uploads"
 
 
-def _ensure_dir() -> Path:
-    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    return UPLOAD_DIR
+@lru_cache
+def _client() -> Client:
+    settings = get_settings()
+    if not settings.supabase_url or not settings.supabase_service_key:
+        raise RuntimeError(
+            "SUPABASE_URL / SUPABASE_SERVICE_KEY no configurados: son requeridos "
+            "para guardar uploads en Supabase Storage."
+        )
+    return create_client(settings.supabase_url, settings.supabase_service_key)
 
 
-def write_upload(upload_id: uuid.UUID, content: bytes) -> str:
-    base = _ensure_dir()
-    path = base / f"{upload_id}.csv"
-    path.write_bytes(content)
-    logger.info("[UPLOADS] Wrote %d bytes to %s", len(content), path)
-    return str(path)
+def _object_key(upload_id: uuid.UUID) -> str:
+    return f"{upload_id}.csv"
+
+
+def _upload_sync(key: str, content: bytes) -> None:
+    _client().storage.from_(UPLOAD_BUCKET).upload(
+        path=key,
+        file=content,
+        file_options={"content-type": "text/csv", "upsert": "true"},
+    )
+
+
+def _download_sync(key: str) -> bytes:
+    return _client().storage.from_(UPLOAD_BUCKET).download(key)
+
+
+def _remove_sync(key: str) -> None:
+    _client().storage.from_(UPLOAD_BUCKET).remove([key])
+
+
+async def write_upload(upload_id: uuid.UUID, content: bytes) -> str:
+    """Sube el CSV al bucket y devuelve la object key (va en `uploads.storage_path`)."""
+    key = _object_key(upload_id)
+    await asyncio.to_thread(_upload_sync, key, content)
+    logger.info("[UPLOADS] Subido %d bytes a supabase://%s/%s", len(content), UPLOAD_BUCKET, key)
+    return key
+
+
+async def read_upload(storage_path: str) -> bytes:
+    """Baja el CSV del bucket por su object key."""
+    return await asyncio.to_thread(_download_sync, storage_path)
+
+
+async def delete_upload_blob(storage_path: str) -> None:
+    """Borra el objeto del bucket (best-effort — el caller ya hizo el soft-delete)."""
+    await asyncio.to_thread(_remove_sync, storage_path)
