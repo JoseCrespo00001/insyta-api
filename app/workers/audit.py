@@ -357,9 +357,10 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
                 if v.issue_type:
                     issue_counter[v.issue_type] += 1
                 # Conversación que pidió algo fuera del flujo / no resuelto.
+                # Solo valores del enum real del judge (audit_judge.ISSUE_TYPES);
+                # "no_resuelve" no existía en el enum → nunca matcheaba.
                 if (
-                    v.issue_type
-                    in ("alcance", "no_resuelve", "alucinacion", "contradiccion")
+                    v.issue_type in ("alcance", "alucinacion", "contradiccion")
                     and conv_id not in unhandled_seen
                 ):
                     unhandled_seen.add(conv_id)

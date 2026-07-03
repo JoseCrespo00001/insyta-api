@@ -18,6 +18,18 @@ from app.llm.router import FatalLLMError, TransientLLMError
 
 logger = logging.getLogger(__name__)
 
+# Taxonomía canónica de issue_type del judge por-mensaje. Fuente única de verdad:
+# cualquier trigger que filtre por issue_type (p.ej. `unhandled` en workers/audit.py)
+# debe usar valores de acá.
+ISSUE_TYPES: tuple[str, ...] = (
+    "alucinacion",
+    "error_politica",
+    "frustracion",
+    "contradiccion",
+    "alcance",
+    "otro",
+)
+
 SYSTEM_PROMPT = """Sos un auditor de calidad de conversaciones de atención al cliente.
 Recibís una conversación (mensajes anonimizados) y debés evaluar CADA mensaje del
 asistente. Para cada mensaje del asistente devolvé un veredicto:
