@@ -28,6 +28,7 @@ from sqlalchemy.orm import undefer
 
 from app.core.db import engine, tenant_txn
 from app.models import Message, Upload
+from app.services.anonymizer import anonymize
 from app.services.celery_app import celery_app
 from app.services.idempotency import upsert_conversation_idempotent
 from app.workers.parsers import ConversationDTO, get_parser
@@ -109,6 +110,11 @@ async def _persist_messages(
                 "seq": seq,
                 "role": dto.role,
                 "content": dto.content,
+                # PII tokenizada: nunca debe llegar cruda al LLM (iron rule).
+                # Los judges leen content_anonymized con fallback a content.
+                "content_anonymized": (
+                    anonymize(dto.content).text if dto.content else None
+                ),
                 "timestamp": dto.timestamp,
             }
         )
