@@ -21,7 +21,7 @@ from typing import Any
 from sqlalchemy import ColumnElement, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Agent, Conversation, Flow, Message, Project, Upload
+from app.models import Agent, Conversation, Flow, Message, Project, Supervisor, Upload
 from app.models.audits import Audit, AuditConversation, MessageEvaluation
 from app.models.flow_versions import FlowVersion
 from app.models.improvements import Improvement, ImprovementConversation
@@ -41,6 +41,7 @@ _PROJECT_CHILDREN = (
     MessageEvaluation,
     Improvement,
     ImprovementConversation,
+    Supervisor,
 )
 
 # Tablas que cuelgan de una conversación (todas tienen conversation_id).

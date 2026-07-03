@@ -48,6 +48,12 @@ class Audit(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
         ForeignKey("flows.id", ondelete="SET NULL"),
         nullable=True,
     )
+    # Supervisor elegido para esta auditoría (hereda flow/knowledge/attached_data/defaults).
+    supervisor_id: Mapped[uuid.UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("supervisors.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     # Objetivo de la campaña (estilo Meta): leads | ventas | awareness | ...
     objective: Mapped[str | None] = mapped_column(String(32), nullable=True)

@@ -11,6 +11,7 @@ from app.models.base import Base
 from app.models.flow_versions import FlowVersion
 from app.models.flows import Flow
 from app.models.improvements import Improvement, ImprovementConversation
+from app.models.supervisors import Supervisor
 from app.models.tenancy import (
     Agent,
     Conversation,
@@ -37,6 +38,7 @@ __all__ = [
     "MessageEvaluation",
     "Organization",
     "Project",
+    "Supervisor",
     "Upload",
     "User",
 ]
