@@ -25,6 +25,7 @@ from app.models import (
     Flow,
     MessageEvaluation,
     Project,
+    Supervisor,
 )
 from app.services.celery_app import celery_app
 from app.services.report_format import eval_to_camel
@@ -45,6 +46,7 @@ class AuditPayload(_Camel):
     objective: str | None = None  # leads | ventas | awareness | soporte | agendar
     provider: str | None = None  # anthropic | deepseek
     flujo_id: str | None = None
+    supervisor_id: str | None = None  # cerebro reusable; aporta flow + defaults
     conversation_ids: list[str] = []
     emphasis: list[str] = []
     free_text: str = ""
@@ -98,6 +100,17 @@ async def create_audit(
 ) -> AuditCreated:
     project_id, org_id = await _resolve_project(session, project_public_id)
 
+    # Supervisor (opcional): aporta flow + defaults de objetivo/énfasis/free_text.
+    supervisor = None
+    if payload.supervisor_id:
+        supervisor = (
+            await session.execute(
+                select(Supervisor).where(Supervisor.public_id == payload.supervisor_id)
+            )
+        ).scalar_one_or_none()
+        if supervisor is None:
+            raise HTTPException(status_code=404, detail="Supervisor not found")
+
     flow_id = None
     flow_name = None
     if payload.flujo_id:
@@ -108,6 +121,26 @@ async def create_audit(
         ).one_or_none()
         if frow is not None:
             flow_id, flow_name = frow.id, frow.name
+    # Si la auditoría no fijó flujo, hereda el del supervisor.
+    if flow_id is None and supervisor is not None and supervisor.flow_id is not None:
+        frow = (
+            await session.execute(
+                select(Flow.id, Flow.name).where(Flow.id == supervisor.flow_id)
+            )
+        ).one_or_none()
+        if frow is not None:
+            flow_id, flow_name = frow.id, frow.name
+
+    # Defaults heredados del supervisor cuando el payload no los trae.
+    objective = payload.objective or (
+        supervisor.default_objective if supervisor else None
+    )
+    emphasis = payload.emphasis or (
+        (supervisor.default_emphasis or []) if supervisor else []
+    )
+    free_text = payload.free_text or (
+        (supervisor.default_free_text or "") if supervisor else ""
+    )
 
     # Resolve conversation public_ids -> internal ids (scoped to the project).
     conv_rows = (
@@ -132,11 +165,12 @@ async def create_audit(
         project_id=project_id,
         org_id=org_id,
         flow_id=flow_id,
+        supervisor_id=supervisor.id if supervisor else None,
         name=(payload.name or "").strip() or f"Auditoría — {flow_name or 'flujo'}",
-        objective=(payload.objective or None),
+        objective=(objective or None),
         provider=(payload.provider or "anthropic"),
-        emphasis=payload.emphasis,
-        free_text=payload.free_text,
+        emphasis=emphasis,
+        free_text=free_text,
         status="running",
         conversation_count=len(conv_ids),
     )
