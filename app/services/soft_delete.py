@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import ColumnElement, select, update
@@ -25,6 +25,7 @@ from app.models import Agent, Conversation, Flow, Message, Project, Supervisor, 
 from app.models.audits import Audit, AuditConversation, MessageEvaluation
 from app.models.flow_versions import FlowVersion
 from app.models.improvements import Improvement, ImprovementConversation
+from app.models.reputation import AgentReputation, UserReputation
 from app.models.tenancy import Evaluation
 
 # Tablas que cuelgan directo de un proyecto (todas tienen project_id).
@@ -42,6 +43,8 @@ _PROJECT_CHILDREN = (
     Improvement,
     ImprovementConversation,
     Supervisor,
+    AgentReputation,
+    UserReputation,
 )
 
 # Tablas que cuelgan de una conversación (todas tienen conversation_id).
@@ -60,7 +63,7 @@ async def _flag(session: AsyncSession, model: Any, where: ColumnElement[bool]) -
     await session.execute(
         update(model)
         .where(where, model.is_deleted.is_(False))
-        .values(is_deleted=True, deleted_at=datetime.now(timezone.utc))
+        .values(is_deleted=True, deleted_at=datetime.now(UTC))
     )
 
 

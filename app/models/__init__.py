@@ -11,6 +11,7 @@ from app.models.base import Base
 from app.models.flow_versions import FlowVersion
 from app.models.flows import Flow
 from app.models.improvements import Improvement, ImprovementConversation
+from app.models.reputation import AgentReputation, UserReputation
 from app.models.supervisors import Supervisor
 from app.models.tenancy import (
     Agent,
@@ -25,6 +26,7 @@ from app.models.uploads import Upload
 
 __all__ = [
     "Agent",
+    "AgentReputation",
     "Audit",
     "AuditConversation",
     "Base",
@@ -41,4 +43,5 @@ __all__ = [
     "Supervisor",
     "Upload",
     "User",
+    "UserReputation",
 ]
