@@ -48,6 +48,7 @@ from app.services.fraud import detect_fraud, fraud_flag_names
 from app.services.reputation import (
     get_user_note,
     update_agent_reputation,
+    update_agent_spc,
     update_user_reputation,
 )
 
@@ -361,12 +362,14 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
     # Punto #6: conversaciones que pidieron un camino no cubierto por el flujo.
     unhandled: list[dict] = []
     unhandled_seen: set = set()
+    agent_ids: set[uuid.UUID] = set()
 
     for conv_id in conv_ids:
         async with tenant_txn(org_id) as session:
             conv = await session.get(Conversation, conv_id)
             if conv is None:
                 continue
+            agent_ids.add(conv.agent_id)
             msgs = await _load_messages(session, conv_id)
             seq_to_msg_id = {m["seq"]: m["id"] for m in msgs}
 
@@ -466,6 +469,12 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
                 verdicts=verdicts,
                 seq_to_msg_id=seq_to_msg_id,
             )
+
+    # SPC: recalcular baseline + tendencia (deriva) de cada agente auditado.
+    if agent_ids:
+        async with tenant_txn(org_id) as session:
+            for aid in agent_ids:
+                await update_agent_spc(session, agent_id=aid)
 
     suggestions = _build_suggestions(issue_counter)
     # Punto #6: a partir de las conversaciones no cubiertas, el experto en

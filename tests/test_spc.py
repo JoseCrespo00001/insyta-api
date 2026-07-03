@@ -10,6 +10,7 @@ from app.services.spc import (
     check_rules,
     compute_baseline,
     detect_drift,
+    spc_summary,
 )
 
 # Baseline conocido para probar reglas: media 80, σ 5 → UCL 95, LCL 65.
@@ -66,3 +67,16 @@ def test_detect_drift_estable():
 def test_detect_drift_mejora():
     # 6 puntos subiendo → tendencia alta → mejora
     assert detect_drift([70, 72, 74, 76, 78, 80], BL) == "mejora"
+
+
+def test_spc_summary_degradacion():
+    # 20 puntos estables (~80) como baseline, luego una caída fuera de límites.
+    baseline = [79, 81, 80, 82, 78, 80, 81, 79, 80, 82] * 2
+    s = spc_summary([*baseline, 40])
+    assert s is not None
+    assert s.trend == "degradacion"
+    assert 79 <= s.baseline.mean <= 81
+
+
+def test_spc_summary_none_when_insufficient():
+    assert spc_summary([80]) is None

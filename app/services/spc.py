@@ -105,13 +105,31 @@ def detect_drift(values: list[float], baseline: Baseline) -> str:
     return "estable"
 
 
+@dataclass(frozen=True)
+class SpcSummary:
+    baseline: Baseline
+    trend: str  # degradacion | mejora | estable
+    violations: list[SpcViolation]
+
+
+def spc_summary(values: list[float], baseline_n: int = 20) -> SpcSummary | None:
+    """Baseline + deriva de una serie de scores por agente. None si no hay datos."""
+    baseline = compute_baseline(values, n=baseline_n)
+    if baseline is None:
+        return None
+    violations = check_rules(values, baseline)
+    return SpcSummary(baseline, detect_drift(values, baseline), violations)
+
+
 __all__ = [
     "RULE_8_SAME_SIDE",
     "RULE_BEYOND_3SIGMA",
     "RULE_TREND_6",
     "Baseline",
+    "SpcSummary",
     "SpcViolation",
     "check_rules",
     "compute_baseline",
     "detect_drift",
+    "spc_summary",
 ]

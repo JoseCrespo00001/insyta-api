@@ -14,7 +14,8 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import AgentReputation, UserReputation
+from app.models import AgentReputation, Evaluation, UserReputation
+from app.services.spc import spc_summary
 
 _USER_SALT = "insyta-userrep-v1"
 
@@ -40,6 +41,38 @@ def risk_label(fraud_attempts: int, avg_sentiment: float | None, is_lead: bool) 
     if avg_sentiment is not None and avg_sentiment >= 4:
         return "recurrente"
     return "neutral"
+
+
+async def update_agent_spc(session: AsyncSession, *, agent_id: uuid.UUID) -> None:
+    """Recalcula baseline SPC + tendencia del agente sobre su historial de scores
+    y lo persiste en agent_reputation (deriva → alerta en el reporte)."""
+    scores = (
+        (
+            await session.execute(
+                select(Evaluation.score)
+                .where(Evaluation.agent_id == agent_id, Evaluation.score.is_not(None))
+                .order_by(Evaluation.evaluated_at.asc().nulls_last())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    summary = spc_summary([float(s) for s in scores if s is not None])
+    if summary is None:
+        return
+    rep = (
+        await session.execute(
+            select(AgentReputation).where(AgentReputation.agent_id == agent_id)
+        )
+    ).scalar_one_or_none()
+    if rep is None:
+        return
+    b = summary.baseline
+    rep.baseline_mean = Decimal(str(round(b.mean, 2)))
+    rep.baseline_std = Decimal(str(round(b.std, 3)))
+    rep.ucl = Decimal(str(round(b.ucl, 2)))
+    rep.lcl = Decimal(str(round(b.lcl, 2)))
+    rep.trend = summary.trend
 
 
 def user_note(usuario_riesgoso: bool, fraud_attempts: int) -> str | None:
@@ -153,6 +186,7 @@ __all__ = [
     "merge_avg",
     "risk_label",
     "update_agent_reputation",
+    "update_agent_spc",
     "update_user_reputation",
     "user_note",
 ]
