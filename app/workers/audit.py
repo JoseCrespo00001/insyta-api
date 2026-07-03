@@ -44,6 +44,7 @@ from app.models import (
     Supervisor,
 )
 from app.services.celery_app import celery_app
+from app.services.fraud import detect_fraud, fraud_flag_names
 from app.services.reputation import (
     get_user_note,
     update_agent_reputation,
@@ -319,9 +320,9 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
             if supervisor and supervisor.knowledge_base
             else None
         ) or (project.company_context if project else None)
-        source_of_truth = _format_source_of_truth(
-            supervisor.attached_data if supervisor else None
-        )
+        attached_data = supervisor.attached_data if supervisor else None
+        source_of_truth = _format_source_of_truth(attached_data)
+        attached_precios = (attached_data or {}).get("precios")
         # El flow puede venir del supervisor si la auditoría no fijó uno propio.
         effective_flow_id = flow_id or (supervisor.flow_id if supervisor else None)
         flow_summary = None
@@ -398,6 +399,12 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
                 evaluated += 1
                 # Reputación (solo en evals nuevos, para no doble-contar en re-runs).
                 is_lead = bool(parsed.resolution) and (parsed.satisfaction or 0) >= 4
+                # Fraude (determinista) sobre los mensajes del usuario.
+                fraud_flags = detect_fraud(msgs, precios=attached_precios)
+                if fraud_flags:
+                    fraud_names = fraud_flag_names(fraud_flags)
+                    for name in fraud_names:
+                        issue_counter[f"fraude:{name}"] += 1
                 await update_agent_reputation(
                     session,
                     agent_id=conv.agent_id,
@@ -413,7 +420,7 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
                     project_id=conv.project_id,
                     sentiment=parsed.satisfaction,
                     is_lead=is_lead,
-                    is_fraud=False,  # fraude se cablea en Fase 5
+                    is_fraud=bool(fraud_flags),
                 )
 
             # 2. Per-message verdicts (con objetivo + empresa + flujo).
