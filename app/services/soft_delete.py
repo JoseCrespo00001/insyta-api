@@ -96,6 +96,13 @@ async def soft_delete_upload(session: AsyncSession, upload_id: uuid.UUID) -> Non
     await _flag(session, Upload, Upload.id == upload_id)
 
 
+async def soft_delete_supervisor(
+    session: AsyncSession, supervisor_id: uuid.UUID
+) -> None:
+    # Leaf: las auditorías lo referencian con SET NULL, no hay subtree.
+    await _flag(session, Supervisor, Supervisor.id == supervisor_id)
+
+
 async def soft_delete_flow(session: AsyncSession, flow_id: uuid.UUID) -> None:
     impr_ids = (
         (
