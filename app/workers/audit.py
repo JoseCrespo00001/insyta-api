@@ -44,6 +44,10 @@ from app.models import (
     Supervisor,
 )
 from app.services.celery_app import celery_app
+from app.services.reputation import (
+    update_agent_reputation,
+    update_user_reputation,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -382,6 +386,25 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
                 )
                 await _persist_conversation_eval(session, conv, parsed, usage)
                 evaluated += 1
+                # Reputación (solo en evals nuevos, para no doble-contar en re-runs).
+                is_lead = bool(parsed.resolution) and (parsed.satisfaction or 0) >= 4
+                await update_agent_reputation(
+                    session,
+                    agent_id=conv.agent_id,
+                    org_id=conv.org_id,
+                    project_id=conv.project_id,
+                    score=parsed.score,
+                    has_veto=False,  # VETO se cablea con la rúbrica (Fase 2/5)
+                )
+                await update_user_reputation(
+                    session,
+                    external_id=conv.external_id,
+                    org_id=conv.org_id,
+                    project_id=conv.project_id,
+                    sentiment=parsed.satisfaction,
+                    is_lead=is_lead,
+                    is_fraud=False,  # fraude se cablea en Fase 5
+                )
 
             # 2. Per-message verdicts (con objetivo + empresa + flujo).
             verdicts = await judge_messages(
