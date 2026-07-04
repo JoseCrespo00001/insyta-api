@@ -27,6 +27,16 @@ _EMPTY_EVAL: dict = {
     "phoenixTraceId": "",
     "phoenixSpanId": "",
     "evaluatedAt": "",
+    # Rúbrica (AUD-7.1). null/[] mientras no haya corrido el judge con rúbrica.
+    "scoreBruto": None,
+    "scoreFinal": None,
+    "confidence": None,
+    "hasVeto": False,
+    "vetoFlags": [],
+    "segment": None,
+    "sentimentTrajectory": [],
+    "requiereRevisionHumana": False,
+    "rubric": None,
 }
 
 
@@ -53,4 +63,14 @@ def eval_to_camel(ev: Evaluation | None) -> dict:
         "phoenixTraceId": ev.phoenix_trace_id or "",
         "phoenixSpanId": ev.phoenix_span_id or "",
         "evaluatedAt": ev.evaluated_at.isoformat() if ev.evaluated_at else "",
+        # Rúbrica (AUD-7.1).
+        "scoreBruto": ev.score_bruto,
+        "scoreFinal": ev.score_final,
+        "confidence": float(ev.confidence) if ev.confidence is not None else None,
+        "hasVeto": bool(ev.has_veto),
+        "vetoFlags": ev.veto_flags or [],
+        "segment": ev.segment,
+        "sentimentTrajectory": ev.sentiment_trajectory or [],
+        "requiereRevisionHumana": bool(ev.requiere_revision_humana),
+        "rubric": ev.rubric,
     }

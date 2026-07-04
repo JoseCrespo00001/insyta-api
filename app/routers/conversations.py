@@ -81,6 +81,8 @@ class ConversationDetail(BaseModel):
     platform: str
     status: str
     started_at: str | None
+    contact_name: str | None = None
+    contact_phone: str | None = None
     messages: list[MessageOut]
     # ConversationEvaluation (camelCase) que consume ConversationReport del front.
     evaluation: dict | None
@@ -346,6 +348,8 @@ async def get_conversation_detail(
         platform=conv.platform,
         status=conv.status,
         started_at=conv.started_at.isoformat() if conv.started_at else None,
+        contact_name=conv.contact_name,
+        contact_phone=conv.contact_phone,
         messages=messages_out,
         evaluation=eval_to_camel(evaluation) if evaluation else None,
     )

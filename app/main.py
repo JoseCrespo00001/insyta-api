@@ -16,6 +16,7 @@ from app.routers import (
     me,
     projects,
     score,
+    supervisors,
     uploads,
 )
 from app.routers import (
@@ -154,6 +155,7 @@ def create_app() -> FastAPI:
     app.include_router(score.router)
     app.include_router(uploads.router)
     app.include_router(flows.router)
+    app.include_router(supervisors.router)
     app.include_router(audits.router)
     app.include_router(improvements.router)
     app.include_router(dashboard.router)

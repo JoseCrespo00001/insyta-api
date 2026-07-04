@@ -15,16 +15,17 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import ColumnElement, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Agent, Conversation, Flow, Message, Project, Upload
+from app.models import Agent, Conversation, Flow, Message, Project, Supervisor, Upload
 from app.models.audits import Audit, AuditConversation, MessageEvaluation
 from app.models.flow_versions import FlowVersion
 from app.models.improvements import Improvement, ImprovementConversation
+from app.models.reputation import AgentReputation, UserReputation
 from app.models.tenancy import Evaluation
 
 # Tablas que cuelgan directo de un proyecto (todas tienen project_id).
@@ -41,6 +42,9 @@ _PROJECT_CHILDREN = (
     MessageEvaluation,
     Improvement,
     ImprovementConversation,
+    Supervisor,
+    AgentReputation,
+    UserReputation,
 )
 
 # Tablas que cuelgan de una conversación (todas tienen conversation_id).
@@ -59,7 +63,7 @@ async def _flag(session: AsyncSession, model: Any, where: ColumnElement[bool]) -
     await session.execute(
         update(model)
         .where(where, model.is_deleted.is_(False))
-        .values(is_deleted=True, deleted_at=datetime.now(timezone.utc))
+        .values(is_deleted=True, deleted_at=datetime.now(UTC))
     )
 
 
@@ -93,6 +97,13 @@ async def soft_delete_upload(session: AsyncSession, upload_id: uuid.UUID) -> Non
     )
     await soft_delete_conversations(session, conv_ids)
     await _flag(session, Upload, Upload.id == upload_id)
+
+
+async def soft_delete_supervisor(
+    session: AsyncSession, supervisor_id: uuid.UUID
+) -> None:
+    # Leaf: las auditorías lo referencian con SET NULL, no hay subtree.
+    await _flag(session, Supervisor, Supervisor.id == supervisor_id)
 
 
 async def soft_delete_flow(session: AsyncSession, flow_id: uuid.UUID) -> None:

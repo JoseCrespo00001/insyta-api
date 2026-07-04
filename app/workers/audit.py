@@ -15,6 +15,7 @@ Without a provider key the judge raises FatalLLMError; the audit is marked
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import uuid
 from collections import Counter
@@ -40,8 +41,21 @@ from app.models import (
     MessageEvaluation,
     Organization,
     Project,
+    Supervisor,
 )
 from app.services.celery_app import celery_app
+from app.services.fraud import detect_fraud, fraud_flag_names
+from app.services.reputation import (
+    get_user_note,
+    update_agent_reputation,
+    update_agent_spc,
+    update_user_reputation,
+)
+from app.services.rubric_mapping import map_eval_to_rubric
+from app.services.rubric_scoring import compute_scores
+from app.services.segmentation import derive_segment
+from app.services.validators.cbu import find_cbus, validate_cbu
+from app.services.validators.prices import check_prices
 
 logger = logging.getLogger(__name__)
 
@@ -259,6 +273,68 @@ async def _compute_report_summary(
     return {"total": len(conv_ids), "satisfaction": buckets, "avgScore": avg}
 
 
+def _det_veto(msgs: list[dict], precios: object) -> list[str]:
+    """Flags VETO deterministas desde los mensajes del BOT: precio inventado y
+    CBU inválido dado por el agente."""
+    veto: list[str] = []
+    bot_text = " ".join(
+        m["content"] for m in msgs if m.get("role") == "assistant" and m.get("content")
+    )
+    if precios and not check_prices(bot_text, precios).ok:
+        veto.append("A1_alucinacion")
+    for m in msgs:
+        if m.get("role") == "assistant":
+            for cbu in find_cbus(m.get("content") or ""):
+                if not validate_cbu(cbu):
+                    veto.append("A5_cbu_invalido")
+    return sorted(set(veto))
+
+
+async def _persist_rubric_columns(
+    session: AsyncSession, conv_id: uuid.UUID, rubric, score, segment: str
+) -> None:
+    await session.execute(
+        update(Evaluation)
+        .where(Evaluation.conversation_id == conv_id)
+        .values(
+            rubric=rubric.model_dump(),
+            score_bruto=score.score_bruto,
+            score_final=score.score_final,
+            confidence=score.confidence,
+            has_veto=score.has_veto,
+            veto_flags=score.veto_flags,
+            segment=segment,
+            sentiment_trajectory=rubric.sentimiento_trayectoria,
+            requiere_revision_humana=rubric.requiere_revision_humana,
+        )
+    )
+
+
+def _format_source_of_truth(attached_data: dict | None) -> str | None:
+    """Serializa la data adjunta del supervisor (precios.json/info.json/…) como
+    un bloque de FUENTE DE VERDAD para el judge. El judge NO debe marcar como
+    alucinación lo que coincide con estos datos."""
+    if not attached_data:
+        return None
+    parts: list[str] = []
+    for key in sorted(attached_data.keys()):
+        value = attached_data[key]
+        try:
+            rendered = json.dumps(value, ensure_ascii=False, indent=2)[:4000]
+        except (TypeError, ValueError):
+            rendered = str(value)[:4000]
+        parts.append(f"[{key}]\n{rendered}")
+    if not parts:
+        return None
+    return (
+        "FUENTE DE VERDAD (datos autoritativos del negocio — verificá precios, "
+        "stock, plazos y datos contra esto; NO marques como alucinación lo que "
+        "coincide con estos datos; solo marcá alucinación si el bot afirma algo "
+        "que CONTRADICE o que NO está respaldado por esta fuente ni por el flujo):\n"
+        + "\n\n".join(parts)
+    )
+
+
 async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
     async with tenant_txn(org_id) as session:
         audit, conv_ids = await _load_audit_conversations(session, audit_id)
@@ -272,12 +348,29 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
         org = await session.get(Organization, org_id)
         org_key_enc = org.anthropic_api_key_encrypted if org else None
         org_ds_enc = org.deepseek_api_key_encrypted if org else None
-        # Contexto para el judge: objetivo de campaña + datos de empresa + flujo.
+        # Contexto para el judge: objetivo + knowledge/fuente de verdad + flujo.
+        # El Supervisor (si la auditoría lo eligió) es el cerebro: aporta
+        # knowledge_base + attached_data (fuente de verdad) y puede aportar el flow.
+        supervisor = (
+            await session.get(Supervisor, audit.supervisor_id)
+            if audit.supervisor_id
+            else None
+        )
         project = await session.get(Project, project_id)
-        company_context = project.company_context if project else None
+        # knowledge del supervisor pisa el company_context legacy del proyecto.
+        company_context = (
+            supervisor.knowledge_base
+            if supervisor and supervisor.knowledge_base
+            else None
+        ) or (project.company_context if project else None)
+        attached_data = supervisor.attached_data if supervisor else None
+        source_of_truth = _format_source_of_truth(attached_data)
+        attached_precios = (attached_data or {}).get("precios")
+        # El flow puede venir del supervisor si la auditoría no fijó uno propio.
+        effective_flow_id = flow_id or (supervisor.flow_id if supervisor else None)
         flow_summary = None
-        if flow_id is not None:
-            flow = await session.get(Flow, flow_id)
+        if effective_flow_id is not None:
+            flow = await session.get(Flow, effective_flow_id)
             if flow is not None and flow.flow_json:
                 flow_summary = summarize_flow(flow.flow_json)[:2500]
 
@@ -287,6 +380,8 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
         ctx_parts.append(f"OBJETIVO DE LA CAMPAÑA: {objective_label}")
     if company_context:
         ctx_parts.append(f"DATOS DE LA EMPRESA:\n{company_context}")
+    if source_of_truth:
+        ctx_parts.append(source_of_truth)
     if flow_summary:
         ctx_parts.append(
             f"FLUJO ESPERADO (lo que el agente debería hacer):\n{flow_summary}"
@@ -309,14 +404,25 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
     # Punto #6: conversaciones que pidieron un camino no cubierto por el flujo.
     unhandled: list[dict] = []
     unhandled_seen: set = set()
+    agent_ids: set[uuid.UUID] = set()
 
     for conv_id in conv_ids:
         async with tenant_txn(org_id) as session:
             conv = await session.get(Conversation, conv_id)
             if conv is None:
                 continue
+            agent_ids.add(conv.agent_id)
             msgs = await _load_messages(session, conv_id)
             seq_to_msg_id = {m["seq"]: m["id"] for m in msgs}
+
+            # Historial del usuario (reputación acumulada de auditorías previas):
+            # si es riesgoso, el judge lee con más suspicacia.
+            user_hist = await get_user_note(
+                session, project_id=conv.project_id, external_id=conv.external_id
+            )
+            conv_context = (
+                "\n\n".join(p for p in (eval_context, user_hist) if p) or None
+            )
 
             # 1. Conversation-level eval (skip if already present).
             existing = await session.execute(
@@ -332,10 +438,13 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
                         }
                         for m in msgs
                     ],
-                    context=eval_context,
+                    context=conv_context,
                 )
                 await _persist_conversation_eval(session, conv, parsed, usage)
                 evaluated += 1
+                new_parsed = parsed  # rúbrica + reputación se computan post-verdicts
+            else:
+                new_parsed = None
 
             # 2. Per-message verdicts (con objetivo + empresa + flujo).
             verdicts = await judge_messages(
@@ -348,6 +457,8 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
                     p
                     for p in (
                         f"Empresa: {company_context}" if company_context else "",
+                        source_of_truth or "",
+                        user_hist or "",
                         f"Flujo esperado:\n{flow_summary}" if flow_summary else "",
                     )
                     if p
@@ -357,9 +468,10 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
                 if v.issue_type:
                     issue_counter[v.issue_type] += 1
                 # Conversación que pidió algo fuera del flujo / no resuelto.
+                # Solo valores del enum real del judge (audit_judge.ISSUE_TYPES);
+                # "no_resuelve" no existía en el enum → nunca matcheaba.
                 if (
-                    v.issue_type
-                    in ("alcance", "no_resuelve", "alucinacion", "contradiccion")
+                    v.issue_type in ("alcance", "alucinacion", "contradiccion")
                     and conv_id not in unhandled_seen
                 ):
                     unhandled_seen.add(conv_id)
@@ -377,6 +489,51 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
                 verdicts=verdicts,
                 seq_to_msg_id=seq_to_msg_id,
             )
+
+            # 3. Rúbrica + reputación (solo en evals nuevos, para no doble-contar).
+            if new_parsed is not None:
+                fraud_flags = detect_fraud(msgs, precios=attached_precios)
+                fraude_names = fraud_flag_names(fraud_flags)
+                for name in fraude_names:
+                    issue_counter[f"fraude:{name}"] += 1
+                det_veto = _det_veto(msgs, attached_precios)
+                last_turn = msgs[-1]["seq"] if msgs else 0
+                rubric = map_eval_to_rubric(
+                    new_parsed,
+                    verdicts,
+                    last_turn=last_turn,
+                    det_veto=det_veto,
+                    fraude_flags=fraude_names,
+                )
+                score = compute_scores(rubric)
+                segment = derive_segment(rubric, score)
+                await _persist_rubric_columns(session, conv_id, rubric, score, segment)
+                is_lead = (
+                    bool(new_parsed.resolution) and (new_parsed.satisfaction or 0) >= 4
+                )
+                await update_agent_reputation(
+                    session,
+                    agent_id=conv.agent_id,
+                    org_id=conv.org_id,
+                    project_id=conv.project_id,
+                    score=new_parsed.score,
+                    has_veto=score.has_veto,
+                )
+                await update_user_reputation(
+                    session,
+                    external_id=conv.external_id,
+                    org_id=conv.org_id,
+                    project_id=conv.project_id,
+                    sentiment=new_parsed.satisfaction,
+                    is_lead=is_lead,
+                    is_fraud=bool(fraud_flags),
+                )
+
+    # SPC: recalcular baseline + tendencia (deriva) de cada agente auditado.
+    if agent_ids:
+        async with tenant_txn(org_id) as session:
+            for aid in agent_ids:
+                await update_agent_spc(session, agent_id=aid)
 
     suggestions = _build_suggestions(issue_counter)
     # Punto #6: a partir de las conversaciones no cubiertas, el experto en

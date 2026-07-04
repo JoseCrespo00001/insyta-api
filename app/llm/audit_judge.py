@@ -18,6 +18,18 @@ from app.llm.router import FatalLLMError, TransientLLMError
 
 logger = logging.getLogger(__name__)
 
+# Taxonomía canónica de issue_type del judge por-mensaje. Fuente única de verdad:
+# cualquier trigger que filtre por issue_type (p.ej. `unhandled` en workers/audit.py)
+# debe usar valores de acá.
+ISSUE_TYPES: tuple[str, ...] = (
+    "alucinacion",
+    "error_politica",
+    "frustracion",
+    "contradiccion",
+    "alcance",
+    "otro",
+)
+
 SYSTEM_PROMPT = """Sos un auditor de calidad de conversaciones de atención al cliente.
 Recibís una conversación (mensajes anonimizados) y debés evaluar CADA mensaje del
 asistente. Para cada mensaje del asistente devolvé un veredicto:
@@ -26,6 +38,11 @@ asistente. Para cada mensaje del asistente devolvé un veredicto:
 - issue_subtype: subtipo corto en snake_case (o null)
 - severity: "baja" | "media" | "alta" | "critica" (o null si label=ok)
 - note: explicación breve (<=160 chars) de por qué (o null si ok)
+IMPORTANTE sobre alucinación: si el contexto trae un bloque "FUENTE DE VERDAD"
+(datos autoritativos del negocio: precios, stock, plazos, CBU, etc.), un dato del
+bot que COINCIDE con esa fuente (o con el flujo esperado) NO es alucinación. Solo
+marcá "alucinacion" si el bot afirma algo que CONTRADICE la fuente de verdad o que
+no está respaldado por ella ni por el flujo. No penalices datos correctos.
 Considerá especialmente los aspectos de énfasis y la instrucción libre del auditor.
 Respondé SOLO JSON con esta forma: {"verdicts":[{"seq":N,"label":...,"issue_type":...,"issue_subtype":...,"severity":...,"note":...}]}
 Incluí un verdict por cada mensaje con role=assistant, usando su seq."""

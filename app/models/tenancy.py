@@ -198,6 +198,12 @@ class Message(UUIDPrimaryKeyMixin, SoftDeleteMixin, Base):
     role: Mapped[str] = mapped_column(String(16), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     content_anonymized: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Multimodal (AUD-3.4): text | audio | image | doc | location.
+    message_type: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default="text"
+    )
+    # Transcripción de audio/imagen si se procesó (para detectar multimodal ignorado).
+    media_transcript: Mapped[str | None] = mapped_column(Text, nullable=True)
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     extra: Mapped[dict | None] = mapped_column("metadata", JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -247,6 +253,22 @@ class Evaluation(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
     scope_violation: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     topic: Mapped[str | None] = mapped_column(String(128), nullable=True)
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # ── Rúbrica completa (AUD-2.x) ────────────────────────────────────────────
+    # JSON completo del judge (dimensiones A-F con score/turn_id/justificación,
+    # veto_flags, confidence, sentimiento_trayectoria, resumen). Los campos
+    # filtrables/consultables se promueven a columnas propias.
+    rubric: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    score_bruto: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    score_final: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    confidence: Mapped[Decimal | None] = mapped_column(Numeric(4, 3), nullable=True)
+    has_veto: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    veto_flags: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    # cliente_ideal | satisfecho | neutral | insatisfecho | potencial_lead | problematico
+    segment: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    sentiment_trajectory: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    requiere_revision_humana: Mapped[bool | None] = mapped_column(
+        Boolean, nullable=True
+    )
     model_used: Mapped[str | None] = mapped_column(String(64), nullable=True)
     tokens_used: Mapped[int | None] = mapped_column(Integer, nullable=True)
     tokens_input: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -263,6 +285,9 @@ class Evaluation(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
         Index("ix_evaluations_project_id_evaluated_at", "project_id", "evaluated_at"),
         Index("ix_evaluations_agent_id_topic", "agent_id", "topic"),
         Index("ix_evaluations_project_id_score", "project_id", "score"),
+        Index("ix_evaluations_project_id_segment", "project_id", "segment"),
+        Index("ix_evaluations_project_id_has_veto", "project_id", "has_veto"),
+        Index("ix_evaluations_project_id_score_final", "project_id", "score_final"),
         CheckConstraint(
             "score IS NULL OR (score >= 0 AND score <= 100)",
             name="score_range",

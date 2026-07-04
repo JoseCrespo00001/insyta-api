@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import uuid
 from collections.abc import Iterable
 from datetime import datetime, timezone
@@ -28,6 +29,7 @@ from sqlalchemy.orm import undefer
 
 from app.core.db import engine, tenant_txn
 from app.models import Message, Upload
+from app.services.anonymizer import anonymize
 from app.services.celery_app import celery_app
 from app.services.idempotency import upsert_conversation_idempotent
 from app.workers.parsers import ConversationDTO, get_parser
@@ -79,6 +81,23 @@ async def _load_upload_blob(
     return csv_bytes, platform, meta
 
 
+_PHONE_RE = re.compile(r"^\+?\d[\d\s().-]{6,18}\d$")
+
+
+def _phone_from_external(external_id: str | None) -> str | None:
+    """Devuelve un teléfono normalizado si el external_id tiene pinta de número
+    (caso típico WhatsApp), si no None. Solo dígitos + '+' inicial opcional."""
+    if not external_id:
+        return None
+    raw = external_id.strip()
+    if not _PHONE_RE.match(raw):
+        return None
+    digits = re.sub(r"\D", "", raw)
+    if not 8 <= len(digits) <= 15:
+        return None
+    return f"+{digits}" if raw.startswith("+") else digits
+
+
 def _preview(messages: Iterable) -> str:
     for dto in messages:
         if dto.role == "user" and dto.content:
@@ -109,6 +128,11 @@ async def _persist_messages(
                 "seq": seq,
                 "role": dto.role,
                 "content": dto.content,
+                # PII tokenizada: nunca debe llegar cruda al LLM (iron rule).
+                # Los judges leen content_anonymized con fallback a content.
+                "content_anonymized": (
+                    anonymize(dto.content).text if dto.content else None
+                ),
                 "timestamp": dto.timestamp,
             }
         )
@@ -148,6 +172,11 @@ async def process_conversations(
                     "message_count": len(msgs),
                     "status": "completed",
                     "contact_name": dto.contact_name,
+                    # Identificador de usuario para CSV/campaña y reputación.
+                    # Si el parser no lo trajo, derivamos del external_id cuando
+                    # tiene pinta de teléfono (WhatsApp: el external_id ES el número).
+                    "contact_phone": dto.contact_phone
+                    or _phone_from_external(dto.external_id),
                     "ended_at": msgs[-1].timestamp if msgs else None,
                 },
             )
