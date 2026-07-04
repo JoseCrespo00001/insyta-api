@@ -14,6 +14,7 @@ from app.routers import (
     health,
     improvements,
     me,
+    notifications,
     projects,
     score,
     supervisors,
@@ -158,6 +159,7 @@ def create_app() -> FastAPI:
     app.include_router(supervisors.router)
     app.include_router(audits.router)
     app.include_router(improvements.router)
+    app.include_router(notifications.router)
     app.include_router(dashboard.router)
     app.include_router(settings_router.router)
 

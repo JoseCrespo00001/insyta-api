@@ -45,6 +45,7 @@ from app.models import (
 )
 from app.services.celery_app import celery_app
 from app.services.fraud import detect_fraud, fraud_flag_names
+from app.services.notifications import create_notification
 from app.services.reputation import (
     get_user_note,
     update_agent_reputation,
@@ -342,6 +343,7 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
         free_text = audit.free_text
         flow_id = audit.flow_id
         project_id = audit.project_id
+        audit_name = audit.name
         objective = audit.objective
         provider = audit.provider or "anthropic"
         # API keys del tenant (cifradas) según el motor elegido.
@@ -357,6 +359,7 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
             else None
         )
         project = await session.get(Project, project_id)
+        project_public_id = project.public_id if project else None
         # knowledge del supervisor pisa el company_context legacy del proyecto.
         company_context = (
             supervisor.knowledge_base
@@ -399,6 +402,7 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
 
     router = build_router(provider)
     issue_counter: Counter = Counter()
+    critical_count = 0  # convs con VETO / fraude / segmento problemático
     evaluated = 0
     msg_evals = 0
     # Punto #6: conversaciones que pidieron un camino no cubierto por el flujo.
@@ -507,6 +511,8 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
                 )
                 score = compute_scores(rubric)
                 segment = derive_segment(rubric, score)
+                if score.has_veto or bool(fraud_flags) or segment == "problematico":
+                    critical_count += 1
                 await _persist_rubric_columns(session, conv_id, rubric, score, segment)
                 is_lead = (
                     bool(new_parsed.resolution) and (new_parsed.satisfaction or 0) >= 4
@@ -576,6 +582,44 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
                 audit_id=audit_id,
                 suggestions=suggestions,
                 conv_ids=conv_ids,
+            )
+
+        # Notificaciones reales para la campana (idempotentes por event_key).
+        link = f"/projects/{project_public_id}" if project_public_id else None
+        await create_notification(
+            session,
+            org_id=org_id,
+            project_id=project_id,
+            kind="audit",
+            title="Auditoría completada",
+            detail=f"{audit_name} · {len(conv_ids)} conversaciones analizadas.",
+            link=link,
+            event_key=f"audit_completed:{audit_id}",
+        )
+        if critical_count > 0:
+            plural = "es" if critical_count != 1 else ""
+            await create_notification(
+                session,
+                org_id=org_id,
+                project_id=project_id,
+                kind="suspicious",
+                title=f"{critical_count} conversaci{'ones' if critical_count != 1 else 'ón'} crítica{plural}",
+                detail="VETO, fraude o experiencia problemática detectados.",
+                link=link,
+                event_key=f"audit_critical:{audit_id}",
+            )
+        if suggestions:
+            n_sug = len(suggestions)
+            plural = "s" if n_sug != 1 else ""
+            await create_notification(
+                session,
+                org_id=org_id,
+                project_id=project_id,
+                kind="improvement",
+                title=f"{n_sug} sugerencia{plural} nueva{plural}",
+                detail=f"{audit_name} · mejoras propuestas.",
+                link=link,
+                event_key=f"audit_suggestions:{audit_id}",
             )
 
     return {

@@ -11,6 +11,7 @@ from app.models.base import Base
 from app.models.flow_versions import FlowVersion
 from app.models.flows import Flow
 from app.models.improvements import Improvement, ImprovementConversation
+from app.models.notifications import Notification
 from app.models.reputation import AgentReputation, UserReputation
 from app.models.supervisors import Supervisor
 from app.models.tenancy import (
@@ -38,6 +39,7 @@ __all__ = [
     "ImprovementConversation",
     "Message",
     "MessageEvaluation",
+    "Notification",
     "Organization",
     "Project",
     "Supervisor",
