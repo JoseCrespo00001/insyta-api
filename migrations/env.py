@@ -8,6 +8,7 @@ place. Falls back to alembic.ini's `sqlalchemy.url` if settings can't be loaded
 from __future__ import annotations
 
 import asyncio
+import os
 from logging.config import fileConfig
 
 from alembic import context
@@ -22,6 +23,20 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
+
+def _host(url: str) -> str:
+    """Host de una URL sqlalchemy (postgresql+asyncpg://u:p@HOST:port/db)."""
+    try:
+        tail = url.split("@", 1)[1] if "@" in url else url.split("://", 1)[1]
+        return tail.split("/", 1)[0].rsplit(":", 1)[0].strip("[]").lower()
+    except (IndexError, AttributeError):
+        return url
+
+
+# Resolvemos la URL desde settings; el except SOLO cubre el fallo de carga de
+# settings (CI sin config) — NO puede tragarse la guarda anti-prod de abajo.
+settings_url: str | None = None
+_is_prod_env = False
 try:
     from app.core.config import get_settings
 
@@ -29,9 +44,24 @@ try:
     # está seteada, si no cae a database_url (compat con setups sin split de rol).
     _s = get_settings()
     settings_url = _s.migration_database_url or _s.database_url
-    config.set_main_option("sqlalchemy.url", settings_url)
+    _is_prod_env = (_s.environment or "").lower() == "production"
 except Exception:  # pragma: no cover - settings unavailable in some CI contexts
-    pass
+    settings_url = None
+
+if settings_url:
+    # GUARDA ANTI-PROD (fuera del try, para que el raise NO se trague): correr una
+    # migración local contra una DB REMOTA (Supabase/prod) por accidente es como se
+    # metieron tablas de auditoría en prod. Fuera de environment=production abortamos
+    # si el host es remoto, salvo opt-in explícito ALLOW_REMOTE_MIGRATION=1 (EC2/CI).
+    _local = {"localhost", "127.0.0.1", "::1", "postgres", "db", ""}
+    _opt_in = os.getenv("ALLOW_REMOTE_MIGRATION") == "1"
+    if _host(settings_url) not in _local and not _is_prod_env and not _opt_in:
+        raise RuntimeError(
+            f"Alembic apunta a una DB REMOTA (host={_host(settings_url)!r}) fuera de "
+            "environment=production. Abortando para no migrar prod por accidente. "
+            "Si es intencional (deploy), seteá ALLOW_REMOTE_MIGRATION=1."
+        )
+    config.set_main_option("sqlalchemy.url", settings_url)
 
 target_metadata = Base.metadata
 

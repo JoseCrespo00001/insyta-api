@@ -87,6 +87,26 @@ uv run python scripts/audit_bpmn_coverage.py   # BPMN audit: endpoints vs BPMN t
 Run tests from **this dir**, not repo root, to keep them scoped and avoid timeouts.
 ruff line-length = 100. mypy en strict.
 
+## Prod DB safety (regla dura — aprendida a los golpes)
+
+**INCIDENTE (2026-07-04): correr tooling local (pytest/alembic) contra la DB de prod borró TODOS
+los `projects` y su cascade (conversaciones, mensajes, uploads, evaluaciones, auditorías, flujos).**
+La causa raíz: el `.env` del repo tenía `DATABASE_URL` apuntando a **prod Supabase**, así que
+cualquier comando sin override explícito pegaba a producción.
+
+Reglas para que NUNCA se repita:
+- **El `.env` local apunta SIEMPRE a localhost** (`localhost:5433/insyta`). Las URLs de prod van
+  **solo en el `.env` del EC2**, nunca en tu máquina. En el `.env` local la URL de prod queda
+  comentada como `# [MOVIDA A LOCAL POR SEGURIDAD] ...`.
+- **`pytest` solo corre contra una DB local.** `tests/conftest.py` aborta la sesión entera
+  (import-time) si `get_settings().database_url` **o** `TEST_DATABASE_URL` apuntan a un host no-local.
+  No lo desactives.
+- **`alembic` no migra prod por accidente.** `migrations/env.py` aborta si la URL es remota y
+  `environment != production`, salvo opt-in explícito `ALLOW_REMOTE_MIGRATION=1`. El **deploy del
+  EC2 debe correr con `ENVIRONMENT=production`** (o `ALLOW_REMOTE_MIGRATION=1`) para poder migrar.
+- **Nunca** setees `DATABASE_URL`/`TEST_DATABASE_URL` a una URL de Supabase/prod para correr tests
+  o migraciones desde tu máquina. Si necesitás tocar prod, es un deploy (EC2), no un comando local.
+
 ## Soft-delete (regla dura)
 
 - **Nunca `DROP`/`TRUNCATE`/reset de la base ni de una tabla.** La DB de prod no se borra ni se
