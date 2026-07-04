@@ -43,9 +43,51 @@ TEST_DATABASE_URL = os.getenv(
     "postgresql+asyncpg://postgres:postgres@localhost:5433/insyta_test",
 )
 
-# Guarda de seguridad: si el TEST_DATABASE_URL es la DB de la app, abortar.
-# (Ya pasó: correr pytest contra `insyta` borró proyectos/conversaciones reales.)
-_APP_DB_URL = os.getenv("DATABASE_URL", "")
+# ---------------------------------------------------------------------------
+# GUARDA DURA ANTI-PROD (aprendido a los golpes: correr pytest/alembic contra
+# la DB de prod borró proyectos/conversaciones reales — cascade desde projects).
+#
+# Los tests SOLO pueden tocar una DB LOCAL. Chequeamos DOS cosas:
+#   1. El engine de la app (get_settings().database_url) — resuelve el `.env`,
+#      cosa que os.getenv NO ve. Los worker-tests usan este engine; si apunta a
+#      Supabase/prod, un test podría escribir/borrar en producción.
+#   2. TEST_DATABASE_URL — la DB dedicada que los fixtures truncan/reseteean.
+# Si CUALQUIERA no es local, abortamos TODA la sesión de tests (import-time).
+# ---------------------------------------------------------------------------
+_LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "postgres", "db", ""}
+
+
+def _db_host(url: str) -> str:
+    """Extrae el host de una URL sqlalchemy (postgresql+asyncpg://u:p@HOST:port/db)."""
+    try:
+        after_at = url.split("@", 1)[1] if "@" in url else url.split("://", 1)[1]
+        return after_at.split("/", 1)[0].rsplit(":", 1)[0].strip("[]").lower()
+    except (IndexError, AttributeError):
+        return url
+
+
+def _assert_local(url: str, label: str) -> None:
+    host = _db_host(url)
+    if host not in _LOCAL_HOSTS:
+        raise RuntimeError(
+            f"{label} apunta a una DB REMOTA/PROD (host={host!r}). Los tests NO "
+            f"pueden correr contra prod — borrarían datos reales. Usá una DB "
+            f"local (localhost:5433). Seteá {label} explícitamente antes de pytest."
+        )
+
+
+# 1. El engine real de la app (incluye lo que venga del `.env`).
+try:
+    from app.core.config import get_settings
+
+    _APP_DB_URL = get_settings().database_url
+except Exception:  # pragma: no cover - si config no carga, seguimos con env
+    _APP_DB_URL = os.getenv("DATABASE_URL", "")
+if _APP_DB_URL:
+    _assert_local(_APP_DB_URL, "DATABASE_URL (engine de la app)")
+
+# 2. La DB dedicada de tests.
+_assert_local(TEST_DATABASE_URL, "TEST_DATABASE_URL")
 if TEST_DATABASE_URL.rstrip("/").endswith("/insyta") or (
     _APP_DB_URL and TEST_DATABASE_URL == _APP_DB_URL
 ):
