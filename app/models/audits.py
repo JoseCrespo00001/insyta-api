@@ -63,6 +63,8 @@ class Audit(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
     free_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="running")
     conversation_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Progreso: conversaciones ya procesadas por el worker (para la barra del front).
+    evaluated_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     suggestions: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     report_summary: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
