@@ -61,16 +61,13 @@ async def _ensure_rls_role(superuser_engine: AsyncEngine) -> None:
         await conn.execute(text(f"GRANT USAGE ON SCHEMA public TO {RLS_ROLE}"))
         await conn.execute(
             text(
-                f"GRANT SELECT, INSERT, UPDATE, DELETE "
-                f"ON ALL TABLES IN SCHEMA public TO {RLS_ROLE}"
+                f"GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO {RLS_ROLE}"
             )
         )
 
 
 def _rls_url() -> str:
-    return TEST_DATABASE_URL.replace(
-        "postgres:postgres@", f"{RLS_ROLE}:{RLS_PASSWORD}@"
-    )
+    return TEST_DATABASE_URL.replace("postgres:postgres@", f"{RLS_ROLE}:{RLS_PASSWORD}@")
 
 
 async def _seed_two_orgs(su_engine: AsyncEngine) -> dict:
@@ -177,9 +174,7 @@ def _make_token(org_id: uuid.UUID, allowed: list[uuid.UUID]) -> str:
     return jwt.encode(base, "x" * 32, algorithm="HS256")
 
 
-def _override_with_rls(
-    rls_engine: AsyncEngine, org_id: uuid.UUID, projects: list[uuid.UUID]
-):
+def _override_with_rls(rls_engine: AsyncEngine, org_id: uuid.UUID, projects: list[uuid.UUID]):
     factory = async_sessionmaker(rls_engine, expire_on_commit=False)
 
     async def _override():
@@ -210,6 +205,23 @@ def _settings_for_jwt(monkeypatch):
 
 def _client() -> httpx.AsyncClient:
     return httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
+
+
+def test_conversations_display_hides_pii_and_buckets():
+    """B5: la pestaña Conversaciones muestra pseudónimo, nunca el teléfono crudo.
+    B2-adjacent: el bucket de satisfacción sale de la fuente única (report_metrics)."""
+    from app.routers.conversations import _display, _sat_bucket
+
+    phone = "+5491133334444"
+    assert _display(None, phone).startswith("cliente #")
+    assert "+549" not in _display(None, phone)
+    assert "+549" not in _display(phone, phone)  # contact_name también teléfono
+    assert _display("Juan Pérez", phone) == "Juan Pérez"  # nombre real se respeta
+    # bucket None-safe (conv sin evaluar → None, no "insatisfecho")
+    assert _sat_bucket(None) is None
+    assert _sat_bucket(5) == "satisfecho"
+    assert _sat_bucket(3) == "neutral"
+    assert _sat_bucket(2) == "insatisfecho"
 
 
 @pytest.mark.asyncio
@@ -301,6 +313,9 @@ async def test_list_conversations_only_returns_own():
         items = r.json()["items"]
         assert len(items) == 1
         assert items[0]["public_id"] == ids["conv_a_public"]
+        # B5: el endpoint pseudonimiza — nunca devuelve el external_id crudo.
+        assert items[0]["external_id"].startswith("cliente #")
+        assert "ext-a" not in items[0]["external_id"]
     finally:
         app.dependency_overrides.clear()
         await rls_engine.dispose()
