@@ -14,6 +14,7 @@ Caveats declarados:
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import UTC, datetime
 
@@ -23,6 +24,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import Conversation, Evaluation, Message
 from app.models.reputation import UserReputation
 from app.services.reputation import hash_user_key
+
+logger = logging.getLogger(__name__)
 
 # Timestamps anteriores a esto son el fallback epoch de un parser roto → ruido.
 _EPOCH_CUTOFF = datetime(1971, 1, 1, tzinfo=UTC)
@@ -192,7 +195,15 @@ async def get_client_profile(
     for r in rows:
         if r.topic:
             topics[r.topic] = topics.get(r.topic, 0) + 1
-    hours = await response_hours(session, project_id, external_id)
+    try:
+        hours = await response_hours(session, project_id, external_id)
+    except Exception as exc:  # degradar: sin histograma, pero devolver el perfil
+        logger.warning(
+            "[CLIENTS] response_hours falló ext=%s: %s — sin histograma",
+            external_id,
+            exc,
+        )
+        hours = [0] * 24
     most_active = max(range(24), key=lambda h: hours[h]) if any(hours) else None
 
     return {

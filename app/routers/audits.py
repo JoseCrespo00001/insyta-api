@@ -387,13 +387,20 @@ async def get_audit(
     }
     sev_weight = {"critica": 3, "alta": 2, "media": 1, "baja": 0}
     for conv, ev in conv_rows:
+        verdicts = me_by_conv.get(conv.id, [])
+        # El reporte es POR AUDITORÍA: solo las conversaciones que ESTA auditoría
+        # evaluó (tienen verdicts con su audit_id). Sin esto, dos auditorías sobre
+        # las mismas conversaciones comparten la Evaluation (única por conversación)
+        # y muestran el MISMO reporte; y una auditoría fallida "toma prestada" la
+        # evaluación de otra que sí corrió.
+        if not verdicts:
+            continue
         sat_bucket = None
         if ev is not None:
             if ev.score is not None:
                 scores.append(ev.score)
             sat_bucket = _SATISFACTION_BUCKETS.get(ev.satisfaction or 0, "insatisfecho")
             buckets[sat_bucket] += 1
-        verdicts = me_by_conv.get(conv.id, [])
         for v in verdicts:
             sev = v.get("severity")
             if sev in risk["bySeverity"]:
