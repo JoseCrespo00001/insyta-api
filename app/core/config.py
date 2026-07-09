@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     # B7: confianza mínima para que un VETO del LLM sea firme (topea el score).
     # Por debajo → VETO tentativo ("a confirmar"). Los DET (CBU/precio) son firmes.
     veto_confidence_threshold: float = Field(default=0.6)
+    # Prompt 2/4 (S2): no generar sugerencias para categorías con menos de N
+    # mensajes (evita ruido tipo "Reducir casos de otro, 1 mensaje").
+    suggestion_min_messages: int = Field(default=3)
 
     database_url: str = Field(
         default="postgresql+asyncpg://postgres:postgres@localhost:5433/insyta"
