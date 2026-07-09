@@ -346,6 +346,13 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
         audit_name = audit.name
         objective = audit.objective
         provider = audit.provider or "anthropic"
+        logger.info(
+            "[AUDIT] start audit=%s org=%s provider=%s convs=%d",
+            audit_id,
+            org_id,
+            provider,
+            len(conv_ids),
+        )
         # API keys del tenant (cifradas) según el motor elegido.
         org = await session.get(Organization, org_id)
         org_key_enc = org.anthropic_api_key_encrypted if org else None
@@ -390,6 +397,16 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
             f"FLUJO ESPERADO (lo que el agente debería hacer):\n{flow_summary}"
         )
     eval_context = "\n\n".join(ctx_parts) or None
+    logger.info(
+        "[AUDIT] contexto audit=%s supervisor=%s fuente_verdad=%s flow=%s "
+        "objetivo=%s ctx_chars=%d",
+        audit_id,
+        supervisor is not None,
+        source_of_truth is not None,
+        flow_summary is not None,
+        objective_label or "-",
+        len(eval_context or ""),
+    )
 
     if org_key_enc or org_ds_enc:
         from app.llm.credentials import set_llm_keys
@@ -400,6 +417,13 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
             deepseek=decrypt_secret(org_ds_enc) if org_ds_enc else None,
         )
 
+    logger.info(
+        "[AUDIT] llm_keys audit=%s anthropic=%s deepseek=%s",
+        audit_id,
+        bool(org_key_enc),
+        bool(org_ds_enc),
+    )
+
     router = build_router(provider)
     issue_counter: Counter = Counter()
     critical_count = 0  # convs con VETO / fraude / segmento problemático
@@ -409,7 +433,14 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
     unhandled: list[dict] = []
     unhandled_seen: set = set()
     agent_ids: set[uuid.UUID] = set()
+    # Acumuladores para la línea de métricas GQM al cierre (costo/tokens/cache).
+    cost_total = 0.0
+    tokens_total = 0
+    latency_total = 0
+    cache_read_total = 0
+    input_total = 0
 
+    logger.info("[AUDIT] loop audit=%s convs=%d", audit_id, len(conv_ids))
     for conv_id in conv_ids:
         async with tenant_txn(org_id) as session:
             conv = await session.get(Conversation, conv_id)
@@ -418,6 +449,7 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
             agent_ids.add(conv.agent_id)
             msgs = await _load_messages(session, conv_id)
             seq_to_msg_id = {m["seq"]: m["id"] for m in msgs}
+            anon_count = sum(1 for m in msgs if m["content_anonymized"])
 
             # Historial del usuario (reputación acumulada de auditorías previas):
             # si es riesgoso, el judge lee con más suspicacia.
@@ -426,6 +458,14 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
             )
             conv_context = (
                 "\n\n".join(p for p in (eval_context, user_hist) if p) or None
+            )
+            logger.info(
+                "[AUDIT] conv=%s msgs=%d anon=%d/%d user_hist=%s",
+                conv.public_id,
+                len(msgs),
+                anon_count,
+                len(msgs),
+                user_hist is not None,
             )
 
             # 1. Conversation-level eval (skip if already present).
@@ -447,8 +487,29 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
                 await _persist_conversation_eval(session, conv, parsed, usage)
                 evaluated += 1
                 new_parsed = parsed  # rúbrica + reputación se computan post-verdicts
+                cost_total += float(usage.cost_usd)
+                tokens_total += usage.input_tokens + usage.output_tokens
+                latency_total += usage.latency_ms
+                cache_read_total += usage.cache_read_input_tokens
+                input_total += usage.input_tokens
+                logger.info(
+                    "[AUDIT] eval conv=%s model=%s tokens=%d/%d cost=%s "
+                    "latency_ms=%d cache_read=%d score=%d resolution=%s sat=%d tone=%s",
+                    conv.public_id,
+                    usage.model,
+                    usage.input_tokens,
+                    usage.output_tokens,
+                    usage.cost_usd,
+                    usage.latency_ms,
+                    usage.cache_read_input_tokens,
+                    parsed.score,
+                    parsed.resolution,
+                    parsed.satisfaction,
+                    parsed.tone,
+                )
             else:
                 new_parsed = None
+                logger.info("[AUDIT] eval conv=%s skip (idempotente)", conv.public_id)
 
             # 2. Per-message verdicts (con objetivo + empresa + flujo).
             verdicts = await judge_messages(
@@ -486,13 +547,32 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
                             "note": v.note or v.issue_type,
                         }
                     )
-            msg_evals += await _persist_message_evals(
+            _persisted = await _persist_message_evals(
                 session,
                 conv=conv,
                 audit_id=audit_id,
                 verdicts=verdicts,
                 seq_to_msg_id=seq_to_msg_id,
             )
+            msg_evals += _persisted
+            _vissues = Counter(v.issue_type for v in verdicts if v.issue_type)
+            logger.info(
+                "[AUDIT] verdicts conv=%s n=%d issues=%s persisted=%d",
+                conv.public_id,
+                len(verdicts),
+                dict(_vissues),
+                _persisted,
+            )
+            for v in verdicts:
+                if v.label and v.label != "ok":
+                    logger.info(
+                        "[AUDIT] verdict conv=%s seq=%s label=%s issue=%s sev=%s",
+                        conv.public_id,
+                        v.seq,
+                        v.label,
+                        v.issue_type,
+                        v.severity,
+                    )
 
             # 3. Rúbrica + reputación (solo en evals nuevos, para no doble-contar).
             if new_parsed is not None:
@@ -501,6 +581,12 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
                 for name in fraude_names:
                     issue_counter[f"fraude:{name}"] += 1
                 det_veto = _det_veto(msgs, attached_precios)
+                logger.info(
+                    "[AUDIT] det conv=%s fraude=%s veto_det=%s",
+                    conv.public_id,
+                    fraude_names or "-",
+                    det_veto or "-",
+                )
                 last_turn = msgs[-1]["seq"] if msgs else 0
                 rubric = map_eval_to_rubric(
                     new_parsed,
@@ -511,6 +597,17 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
                 )
                 score = compute_scores(rubric)
                 segment = derive_segment(rubric, score)
+                logger.info(
+                    "[AUDIT] rubrica conv=%s score_bruto=%s score_final=%s "
+                    "has_veto=%s veto=%s confidence=%s segment=%s",
+                    conv.public_id,
+                    score.score_bruto,
+                    score.score_final,
+                    score.has_veto,
+                    score.veto_flags or "-",
+                    score.confidence,
+                    segment,
+                )
                 if score.has_veto or bool(fraud_flags) or segment == "problematico":
                     critical_count += 1
                 await _persist_rubric_columns(session, conv_id, rubric, score, segment)
@@ -534,12 +631,20 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
                     is_lead=is_lead,
                     is_fraud=bool(fraud_flags),
                 )
+                logger.info(
+                    "[AUDIT] reputacion conv=%s agent=%s is_lead=%s is_fraud=%s",
+                    conv.public_id,
+                    conv.agent_id,
+                    is_lead,
+                    bool(fraud_flags),
+                )
 
     # SPC: recalcular baseline + tendencia (deriva) de cada agente auditado.
     if agent_ids:
         async with tenant_txn(org_id) as session:
             for aid in agent_ids:
                 await update_agent_spc(session, agent_id=aid)
+        logger.info("[AUDIT] spc audit=%s agents=%d", audit_id, len(agent_ids))
 
     suggestions = _build_suggestions(issue_counter)
     # Punto #6: a partir de las conversaciones no cubiertas, el experto en
@@ -558,6 +663,8 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
         except Exception as exc:  # no romper la auditoría por las sugerencias
             logger.warning("[AUDIT] propose_flow_changes falló: %s", exc)
 
+    logger.info("[AUDIT] sugerencias audit=%s n=%d", audit_id, len(suggestions))
+
     async with tenant_txn(org_id) as session:
         summary = await _compute_report_summary(session, conv_ids)
         await session.execute(
@@ -570,6 +677,15 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
                 report_summary=summary,
                 finished_at=datetime.now(UTC),
             )
+        )
+        logger.info(
+            "[AUDIT] done audit=%s convs=%d evaluated=%d msg_evals=%d "
+            "criticas=%d status=active",
+            audit_id,
+            len(conv_ids),
+            evaluated,
+            msg_evals,
+            critical_count,
         )
         # Turn each suggestion into a per-flow Improvement (pending) so the
         # dashboard's /improvements view can surface them next to the flow.
@@ -622,6 +738,19 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
                 event_key=f"audit_suggestions:{audit_id}",
             )
 
+    latency_avg = latency_total // evaluated if evaluated else 0
+    cache_hit = (cache_read_total / input_total) if input_total else 0.0
+    logger.info(
+        "[AUDIT] metrics audit=%s convs=%d evaluated=%d cost_total=%.6f "
+        "tokens_total=%d latency_avg_ms=%d cache_hit=%.2f",
+        audit_id,
+        len(conv_ids),
+        evaluated,
+        cost_total,
+        tokens_total,
+        latency_avg,
+        cache_hit,
+    )
     return {
         "audit_id": str(audit_id),
         "conversations": len(conv_ids),
