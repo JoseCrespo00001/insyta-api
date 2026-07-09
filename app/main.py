@@ -1,8 +1,10 @@
 import logging
+import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.core.config import WEAK_JWT_SECRETS, get_settings
 from app.routers import (
@@ -125,6 +127,25 @@ async def lifespan(app: FastAPI):
     logger.info("[SHUTDOWN] Insyta API shutting down")
 
 
+async def _unhandled_exception_handler(
+    request: Request, exc: Exception
+) -> JSONResponse:
+    """Hook global de errores: toda excepción NO manejada (un bug, un fallo de
+    DB, etc.) se logea con el prefijo [UNHANDLED] + contexto (método/path/tipo)
+    para identificarla, y devuelve un 500 limpio sin filtrar detalles internos.
+    Las HTTPException (4xx intencionales) las maneja FastAPI aparte."""
+    logger.exception(
+        "[UNHANDLED] %s %s -> %s: %s",
+        request.method,
+        request.url.path,
+        type(exc).__name__,
+        exc,
+    )
+    return JSONResponse(
+        status_code=500, content={"detail": "Error interno del servidor"}
+    )
+
+
 def create_app() -> FastAPI:
     settings = get_settings()
 
@@ -148,6 +169,26 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # Hook global de acceso: logea cada request con prefijo [REQ] + duración, así
+    # se puede seguir qué pega a qué endpoint sin instrumentar cada uno a mano.
+    @app.middleware("http")
+    async def _log_requests(request: Request, call_next):
+        start = time.perf_counter()
+        response = await call_next(request)
+        if request.url.path != "/health":  # /health lo pollea el LB, no ensuciar
+            dur_ms = (time.perf_counter() - start) * 1000
+            logger.info(
+                "[REQ] %s %s -> %d (%.0fms)",
+                request.method,
+                request.url.path,
+                response.status_code,
+                dur_ms,
+            )
+        return response
+
+    # Hook global de errores (ver _unhandled_exception_handler).
+    app.add_exception_handler(Exception, _unhandled_exception_handler)
 
     app.include_router(health.router)
     app.include_router(auth.router)
