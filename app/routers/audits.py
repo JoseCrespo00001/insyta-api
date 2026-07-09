@@ -378,6 +378,14 @@ async def get_audit(
     failing = []
     buckets = {"satisfecho": 0, "neutral": 0, "insatisfecho": 0}
     scores = []
+    # Capa de riesgo (separada del score promedio): "¿tengo que intervenir?".
+    risk = {
+        "withVeto": 0,
+        "needsReview": 0,
+        "critical": 0,
+        "bySeverity": {"critica": 0, "alta": 0, "media": 0, "baja": 0},
+    }
+    sev_weight = {"critica": 3, "alta": 2, "media": 1, "baja": 0}
     for conv, ev in conv_rows:
         sat_bucket = None
         if ev is not None:
@@ -385,6 +393,31 @@ async def get_audit(
                 scores.append(ev.score)
             sat_bucket = _SATISFACTION_BUCKETS.get(ev.satisfaction or 0, "insatisfecho")
             buckets[sat_bucket] += 1
+        verdicts = me_by_conv.get(conv.id, [])
+        for v in verdicts:
+            sev = v.get("severity")
+            if sev in risk["bySeverity"]:
+                risk["bySeverity"][sev] += 1
+        has_veto = bool(ev.has_veto) if ev else False
+        needs_review = bool(ev.requiere_revision_humana) if ev else False
+        problematic = (ev.segment == "problematico") if ev else False
+        has_critical_verdict = any(
+            v.get("severity") in ("critica", "alta") for v in verdicts
+        )
+        needs_intervention = (
+            has_veto or needs_review or has_critical_verdict or problematic
+        )
+        if has_veto:
+            risk["withVeto"] += 1
+        if needs_review:
+            risk["needsReview"] += 1
+        if needs_intervention:
+            risk["critical"] += 1
+        # Score de riesgo para ordenar (mayor = más urgente).
+        risk_score = 100 if has_veto else 0
+        risk_score += sum(sev_weight.get(v.get("severity"), 0) for v in verdicts)
+        risk_score += 5 if needs_review else 0
+        risk_score += 10 if problematic else 0
         item = {
             "id": conv.public_id,
             "externalId": conv.external_id,
@@ -394,7 +427,9 @@ async def get_audit(
             "score": ev.score if ev else None,
             "satisfaction": sat_bucket,
             "resolved": ev.resolution if ev else None,
-            "messageEvaluations": me_by_conv.get(conv.id, []),
+            "messageEvaluations": verdicts,
+            "needsIntervention": needs_intervention,
+            "riskScore": risk_score,
             # Campos que el contrato Conversation del front espera (ReportView lee
             # evaluation.*; el workspace lee messages/uploadGroupId al abrir una
             # fallida — el transcript se hidrata aparte vía /conversations/{id}).
@@ -409,6 +444,9 @@ async def get_audit(
         conversations.append(item)
         if ev is not None and ev.resolution is False:
             failing.append(item)
+
+    # Las que requieren intervención primero (mayor riesgo arriba).
+    conversations.sort(key=lambda c: c["riskScore"], reverse=True)
 
     return {
         "id": audit.public_id,
@@ -427,6 +465,7 @@ async def get_audit(
             "total": len(conversations),
             "satisfaction": buckets,
             "avgScore": round(sum(scores) / len(scores)) if scores else None,
+            "risk": risk,
             "failing": failing,
             "conversations": conversations,
             "suggestions": audit.suggestions or [],

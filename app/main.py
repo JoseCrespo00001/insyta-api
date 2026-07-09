@@ -8,6 +8,7 @@ from app.core.config import WEAK_JWT_SECRETS, get_settings
 from app.routers import (
     audits,
     auth,
+    clients,
     conversations,
     dashboard,
     flows,
@@ -158,6 +159,7 @@ def create_app() -> FastAPI:
     app.include_router(flows.router)
     app.include_router(supervisors.router)
     app.include_router(audits.router)
+    app.include_router(clients.router)
     app.include_router(improvements.router)
     app.include_router(notifications.router)
     app.include_router(dashboard.router)
