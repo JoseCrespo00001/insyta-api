@@ -439,6 +439,7 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
     latency_total = 0
     cache_read_total = 0
     input_total = 0
+    processed = 0  # progreso: conversaciones procesadas (para la barra del front)
 
     logger.info("[AUDIT] loop audit=%s convs=%d", audit_id, len(conv_ids))
     for conv_id in conv_ids:
@@ -639,6 +640,15 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
                     bool(fraud_flags),
                 )
 
+            # Progreso incremental: la barra del front (polling cada 2500ms) sube
+            # conversación a conversación en vez de saltar de 0 a 100.
+            processed += 1
+            await session.execute(
+                update(Audit)
+                .where(Audit.id == audit_id)
+                .values(evaluated_count=processed)
+            )
+
     # SPC: recalcular baseline + tendencia (deriva) de cada agente auditado.
     if agent_ids:
         async with tenant_txn(org_id) as session:
@@ -673,6 +683,7 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
             .values(
                 status="active",
                 conversation_count=len(conv_ids),
+                evaluated_count=len(conv_ids),
                 suggestions=suggestions,
                 report_summary=summary,
                 finished_at=datetime.now(UTC),
