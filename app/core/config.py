@@ -18,6 +18,9 @@ class Settings(BaseSettings):
 
     environment: str = Field(default="development")
     log_level: str = Field(default="INFO")
+    # B7: confianza mínima para que un VETO del LLM sea firme (topea el score).
+    # Por debajo → VETO tentativo ("a confirmar"). Los DET (CBU/precio) son firmes.
+    veto_confidence_threshold: float = Field(default=0.6)
 
     database_url: str = Field(
         default="postgresql+asyncpg://postgres:postgres@localhost:5433/insyta"

@@ -18,7 +18,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
 from app.models import Project
-from app.services.client_profile import get_client_profile, list_clients
+from app.services.client_profile import (
+    get_client_profile,
+    list_clients,
+    resolve_external_id,
+)
 
 router = APIRouter(prefix="/api/v1", tags=["clients"])
 
@@ -44,11 +48,13 @@ async def get_clients(
 @router.get("/projects/{project_public_id}/clients/profile", response_model=dict)
 async def get_client(
     project_public_id: str,
-    client: str = Query(..., description="external_id del cliente"),
+    client: str = Query(..., description="user_key (hash) del cliente"),
     session: AsyncSession = Depends(get_db_with_tenant_context),
 ) -> dict:
     project_id = await _resolve_project_id(session, project_public_id)
-    profile = await get_client_profile(session, project_id, client)
+    # B5: el cliente se pide por user_key (hash), no por teléfono crudo en la URL.
+    external_id = await resolve_external_id(session, project_id, client)
+    profile = await get_client_profile(session, project_id, external_id) if external_id else None
     if profile is None:
         raise HTTPException(status_code=404, detail="Client not found")
     return profile
@@ -67,8 +73,8 @@ async def export_clients_csv(
     writer = csv.writer(buf)
     writer.writerow(
         [
-            "external_id",
-            "contacto",
+            "cliente",  # B5: display pseudónimo, nunca teléfono crudo
+            "user_key",
             "conversaciones",
             "score_promedio",
             "satisfaccion_promedio",
@@ -82,8 +88,8 @@ async def export_clients_csv(
     for c in clients:
         writer.writerow(
             [
-                c["externalId"],
-                c["contactName"] or "",
+                c["display"],
+                c["userKey"],
                 c["conversations"],
                 c["avgScore"] if c["avgScore"] is not None else "",
                 c["avgSatisfaction"] if c["avgSatisfaction"] is not None else "",

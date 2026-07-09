@@ -26,7 +26,12 @@ conversacion completa y devolver un JSON estricto con la evaluacion.
 Para cada conversacion, devolve un objeto JSON con estos campos exactos:
 
 - score: int 0-100. Calidad global de la atencion del bot.
-- resolution: bool. true si el bot resolvio el problema del usuario.
+- resolution: bool. true SOLO si la tarea del usuario quedo efectivamente cerrada
+  (pedido tomado/confirmado, dato entregado, turno agendado, etc.). Es FALSE si la
+  conversacion termina con el AGENTE esperando una accion o respuesta del cliente
+  (ej. cierra con una pregunta abierta como "¿le damos?", "¿confirmas?", "¿que
+  talle?") o sin confirmacion explicita de que la tarea se completo. Una pregunta
+  abierta final del bot = NO resuelto.
 - satisfaction: int 1-5. Nivel inferido de satisfaccion del usuario.
 - tone: string, uno de "positive" | "neutral" | "negative".
 - frustration: bool. true si el usuario muestra frustracion explicita.
@@ -69,9 +74,7 @@ Para cada conversacion, devolve un objeto JSON con estos campos exactos:
 """
 
 
-def build_user_prompt(
-    messages: list[dict[str, str]], context: str | None = None
-) -> str:
+def build_user_prompt(messages: list[dict[str, str]], context: str | None = None) -> str:
     """Format the message list into the per-conversation user message.
 
     `context` (opcional) describe objetivo de campana + datos de empresa +

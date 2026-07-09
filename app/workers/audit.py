@@ -25,6 +25,7 @@ from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.core.db import engine, tenant_txn
 from app.llm.audit_judge import judge_messages
 from app.llm.flow_audit import propose_flow_changes, summarize_flow
@@ -46,6 +47,11 @@ from app.models import (
 from app.services.celery_app import celery_app
 from app.services.fraud import detect_fraud, fraud_flag_names
 from app.services.notifications import create_notification
+from app.services.report_metrics import (
+    content_signature,
+    satisfaction_distribution,
+    visible_score,
+)
 from app.services.reputation import (
     get_user_note,
     update_agent_reputation,
@@ -59,8 +65,6 @@ from app.services.validators.cbu import find_cbus, validate_cbu
 from app.services.validators.prices import check_prices
 
 logger = logging.getLogger(__name__)
-
-_SATISFACTION_BUCKETS = {5: "satisfecho", 4: "satisfecho", 3: "neutral"}
 
 # Objetivos de campaña (estilo Meta) → descripción que entiende el judge.
 OBJECTIVE_LABELS = {
@@ -85,9 +89,7 @@ async def _load_audit_conversations(
     if audit is None:
         raise ValueError(f"audit {audit_id} not found")
     rows = await session.execute(
-        select(AuditConversation.conversation_id).where(
-            AuditConversation.audit_id == audit_id
-        )
+        select(AuditConversation.conversation_id).where(AuditConversation.audit_id == audit_id)
     )
     return audit, [r[0] for r in rows]
 
@@ -253,23 +255,19 @@ async def _persist_improvements(
         )
 
 
-async def _compute_report_summary(
-    session: AsyncSession, conv_ids: list[uuid.UUID]
-) -> dict:
+async def _compute_report_summary(session: AsyncSession, conv_ids: list[uuid.UUID]) -> dict:
+    """Fuente ÚNICA del resumen (B2): satisfacción + avgScore. avgScore usa el
+    score VISIBLE (topeado por VETO, B1), no el crudo."""
     if not conv_ids:
         return {"total": 0, "satisfaction": {}, "avgScore": None}
-    rows = await session.execute(
-        select(Evaluation.score, Evaluation.satisfaction).where(
+    result = await session.execute(
+        select(Evaluation.score, Evaluation.score_final, Evaluation.satisfaction).where(
             Evaluation.conversation_id.in_(conv_ids)
         )
     )
-    scores = []
-    buckets = {"satisfecho": 0, "neutral": 0, "insatisfecho": 0}
-    for r in rows:
-        if r.score is not None:
-            scores.append(r.score)
-        bucket = _SATISFACTION_BUCKETS.get(r.satisfaction or 0, "insatisfecho")
-        buckets[bucket] += 1
+    rows = result.all()
+    scores = [s for r in rows if (s := visible_score(r.score, r.score_final)) is not None]
+    buckets = satisfaction_distribution([r.satisfaction for r in rows])
     avg = round(sum(scores) / len(scores)) if scores else None
     return {"total": len(conv_ids), "satisfaction": buckets, "avgScore": avg}
 
@@ -298,7 +296,9 @@ async def _persist_rubric_columns(
         update(Evaluation)
         .where(Evaluation.conversation_id == conv_id)
         .values(
-            rubric=rubric.model_dump(),
+            # veto_firm va DENTRO del JSON de rúbrica (sin migración, B7); el front
+            # lo lee para distinguir VETO firme vs tentativo.
+            rubric={**rubric.model_dump(), "veto_firm": score.veto_firm},
             score_bruto=score.score_bruto,
             score_final=score.score_final,
             confidence=score.confidence,
@@ -361,17 +361,13 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
         # El Supervisor (si la auditoría lo eligió) es el cerebro: aporta
         # knowledge_base + attached_data (fuente de verdad) y puede aportar el flow.
         supervisor = (
-            await session.get(Supervisor, audit.supervisor_id)
-            if audit.supervisor_id
-            else None
+            await session.get(Supervisor, audit.supervisor_id) if audit.supervisor_id else None
         )
         project = await session.get(Project, project_id)
         project_public_id = project.public_id if project else None
         # knowledge del supervisor pisa el company_context legacy del proyecto.
         company_context = (
-            supervisor.knowledge_base
-            if supervisor and supervisor.knowledge_base
-            else None
+            supervisor.knowledge_base if supervisor and supervisor.knowledge_base else None
         ) or (project.company_context if project else None)
         attached_data = supervisor.attached_data if supervisor else None
         source_of_truth = _format_source_of_truth(attached_data)
@@ -393,13 +389,10 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
     if source_of_truth:
         ctx_parts.append(source_of_truth)
     if flow_summary:
-        ctx_parts.append(
-            f"FLUJO ESPERADO (lo que el agente debería hacer):\n{flow_summary}"
-        )
+        ctx_parts.append(f"FLUJO ESPERADO (lo que el agente debería hacer):\n{flow_summary}")
     eval_context = "\n\n".join(ctx_parts) or None
     logger.info(
-        "[AUDIT] contexto audit=%s supervisor=%s fuente_verdad=%s flow=%s "
-        "objetivo=%s ctx_chars=%d",
+        "[AUDIT] contexto audit=%s supervisor=%s fuente_verdad=%s flow=%s objetivo=%s ctx_chars=%d",
         audit_id,
         supervisor is not None,
         source_of_truth is not None,
@@ -440,6 +433,7 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
     cache_read_total = 0
     input_total = 0
     processed = 0  # progreso: conversaciones procesadas (para la barra del front)
+    seen_sigs: set[str] = set()  # B4: firmas de contenido ya contadas (dedup)
 
     logger.info("[AUDIT] loop audit=%s convs=%d", audit_id, len(conv_ids))
     for conv_id in conv_ids:
@@ -451,15 +445,18 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
             msgs = await _load_messages(session, conv_id)
             seq_to_msg_id = {m["seq"]: m["id"] for m in msgs}
             anon_count = sum(1 for m in msgs if m["content_anonymized"])
+            # B4: los duplicados de determinismo se evalúan y quedan visibles, pero
+            # cuentan UNA vez en los agregados (issue_counter → Pareto/sugerencias).
+            conv_sig = content_signature([m["content"] or "" for m in msgs])
+            is_dup = conv_sig in seen_sigs
+            seen_sigs.add(conv_sig)
 
             # Historial del usuario (reputación acumulada de auditorías previas):
             # si es riesgoso, el judge lee con más suspicacia.
             user_hist = await get_user_note(
                 session, project_id=conv.project_id, external_id=conv.external_id
             )
-            conv_context = (
-                "\n\n".join(p for p in (eval_context, user_hist) if p) or None
-            )
+            conv_context = "\n\n".join(p for p in (eval_context, user_hist) if p) or None
             logger.info(
                 "[AUDIT] conv=%s msgs=%d anon=%d/%d user_hist=%s",
                 conv.public_id,
@@ -531,7 +528,7 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
                 ),
             )
             for v in verdicts:
-                if v.issue_type:
+                if v.issue_type and not is_dup:  # B4: duplicados cuentan una vez
                     issue_counter[v.issue_type] += 1
                 # Conversación que pidió algo fuera del flujo / no resuelto.
                 # Solo valores del enum real del judge (audit_judge.ISSUE_TYPES);
@@ -579,8 +576,9 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
             if new_parsed is not None:
                 fraud_flags = detect_fraud(msgs, precios=attached_precios)
                 fraude_names = fraud_flag_names(fraud_flags)
-                for name in fraude_names:
-                    issue_counter[f"fraude:{name}"] += 1
+                if not is_dup:  # B4: duplicados cuentan una vez
+                    for name in fraude_names:
+                        issue_counter[f"fraude:{name}"] += 1
                 det_veto = _det_veto(msgs, attached_precios)
                 logger.info(
                     "[AUDIT] det conv=%s fraude=%s veto_det=%s",
@@ -596,7 +594,11 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
                     det_veto=det_veto,
                     fraude_flags=fraude_names,
                 )
-                score = compute_scores(rubric)
+                score = compute_scores(
+                    rubric,
+                    det_veto=det_veto,
+                    confidence_threshold=get_settings().veto_confidence_threshold,
+                )
                 segment = derive_segment(rubric, score)
                 logger.info(
                     "[AUDIT] rubrica conv=%s score_bruto=%s score_final=%s "
@@ -612,9 +614,7 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
                 if score.has_veto or bool(fraud_flags) or segment == "problematico":
                     critical_count += 1
                 await _persist_rubric_columns(session, conv_id, rubric, score, segment)
-                is_lead = (
-                    bool(new_parsed.resolution) and (new_parsed.satisfaction or 0) >= 4
-                )
+                is_lead = bool(new_parsed.resolution) and (new_parsed.satisfaction or 0) >= 4
                 await update_agent_reputation(
                     session,
                     agent_id=conv.agent_id,
@@ -644,9 +644,7 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
             # conversación a conversación en vez de saltar de 0 a 100.
             processed += 1
             await session.execute(
-                update(Audit)
-                .where(Audit.id == audit_id)
-                .values(evaluated_count=processed)
+                update(Audit).where(Audit.id == audit_id).values(evaluated_count=processed)
             )
 
     # SPC: recalcular baseline + tendencia (deriva) de cada agente auditado.
@@ -690,8 +688,7 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
             )
         )
         logger.info(
-            "[AUDIT] done audit=%s convs=%d evaluated=%d msg_evals=%d "
-            "criticas=%d status=active",
+            "[AUDIT] done audit=%s convs=%d evaluated=%d msg_evals=%d criticas=%d status=active",
             audit_id,
             len(conv_ids),
             evaluated,

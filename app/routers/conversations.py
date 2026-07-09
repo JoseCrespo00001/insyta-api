@@ -30,6 +30,12 @@ from app.models import (
     Upload,
 )
 from app.services.report_format import eval_to_camel
+from app.services.report_metrics import (
+    is_phone_like,
+    satisfaction_bucket,
+    visible_score,
+)
+from app.services.reputation import client_pseudonym
 from app.services.soft_delete import soft_delete_conversations
 
 logger = logging.getLogger(__name__)
@@ -101,9 +107,7 @@ def _decode_cursor(value: str) -> uuid.UUID:
 
 
 async def _resolve_project_id(session: AsyncSession, public_id: str) -> uuid.UUID:
-    result = await session.execute(
-        select(Project.id).where(Project.public_id == public_id)
-    )
+    result = await session.execute(select(Project.id).where(Project.public_id == public_id))
     project_id = result.scalar_one_or_none()
     if project_id is None:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -135,6 +139,7 @@ async def list_project_conversations(
             Conversation.message_count,
             Upload.public_id.label("upload_public_id"),
             Evaluation.score,
+            Evaluation.score_final,
             Evaluation.satisfaction,
             Evaluation.resolution,
         )
@@ -152,24 +157,20 @@ async def list_project_conversations(
     has_more = len(rows) > limit
     page_rows = rows[:limit]
 
-    def _sat(v: int | None) -> str | None:
-        if v is None:
-            return None
-        return "satisfecho" if v >= 4 else "neutral" if v == 3 else "insatisfecho"
-
     items = [
         ConversationSummary(
             public_id=r.public_id,
-            external_id=r.external_id,
+            # B5: pseudónimo, nunca el identificador crudo (teléfono).
+            external_id=client_pseudonym(r.external_id),
             platform=r.platform,
             status=r.status,
             started_at=r.started_at.isoformat() if r.started_at else None,
-            score=r.score,
-            contact_name=r.contact_name,
+            score=visible_score(r.score, r.score_final),  # B1: topeado por VETO
+            contact_name=_display(r.contact_name, r.external_id),
             preview=r.preview,
             message_count=r.message_count or 0,
             upload_group_id=r.upload_public_id,
-            satisfaction=_sat(r.satisfaction),
+            satisfaction=_sat_bucket(r.satisfaction),
             resolved=r.resolution,
         )
         for r in page_rows
@@ -199,9 +200,16 @@ class GlobalUploadGroup(BaseModel):
 
 
 def _sat_bucket(v: int | None) -> str | None:
-    if v is None:
-        return None
-    return "satisfecho" if v >= 4 else "neutral" if v == 3 else "insatisfecho"
+    """Bucket de satisfacción (fuente única: report_metrics); None si no evaluada."""
+    return satisfaction_bucket(v) if v is not None else None
+
+
+def _display(contact_name: str | None, external_id: str) -> str:
+    """Identidad a mostrar sin PII (B5): el nombre si no parece teléfono, si no el
+    pseudónimo estable del cliente. Nunca el teléfono/identificador crudo."""
+    if contact_name and not is_phone_like(contact_name):
+        return contact_name
+    return client_pseudonym(external_id)
 
 
 @router.get("/conversations", response_model=list[GlobalUploadGroup])
@@ -239,6 +247,7 @@ async def list_all_conversations(
                 Conversation.preview,
                 Conversation.message_count,
                 Evaluation.score,
+                Evaluation.score_final,
                 Evaluation.satisfaction,
                 Evaluation.resolution,
             )
@@ -253,11 +262,12 @@ async def list_all_conversations(
         convs_by_upload.setdefault(r.upload_id, []).append(
             GlobalGroupConv(
                 public_id=r.public_id,
-                external_id=r.external_id,
-                contact_name=r.contact_name,
+                # B5: pseudónimo + display sin PII cruda.
+                external_id=client_pseudonym(r.external_id),
+                contact_name=_display(r.contact_name, r.external_id),
                 preview=r.preview,
                 message_count=r.message_count or 0,
-                score=r.score,
+                score=visible_score(r.score, r.score_final),  # B1: topeado por VETO
                 satisfaction=_sat_bucket(r.satisfaction),
                 resolved=r.resolution,
             )
@@ -296,9 +306,7 @@ async def get_conversation_detail(
         raise HTTPException(status_code=404, detail="Conversation not found")
 
     messages_result = await session.execute(
-        select(Message)
-        .where(Message.conversation_id == conv.id)
-        .order_by(Message.timestamp.asc())
+        select(Message).where(Message.conversation_id == conv.id).order_by(Message.timestamp.asc())
     )
     messages = messages_result.scalars().all()
 
@@ -344,12 +352,13 @@ async def get_conversation_detail(
 
     return ConversationDetail(
         public_id=conv.public_id,
-        external_id=conv.external_id,
+        # B5: pseudónimo + display; nunca el teléfono/identificador crudo.
+        external_id=client_pseudonym(conv.external_id),
         platform=conv.platform,
         status=conv.status,
         started_at=conv.started_at.isoformat() if conv.started_at else None,
-        contact_name=conv.contact_name,
-        contact_phone=conv.contact_phone,
+        contact_name=_display(conv.contact_name, conv.external_id),
+        contact_phone=None,  # B5: no exponemos el teléfono crudo
         messages=messages_out,
         evaluation=eval_to_camel(evaluation) if evaluation else None,
     )
@@ -367,9 +376,7 @@ async def delete_conversation(
     y sus hijos (mensajes, evaluations, verdicts). No borra filas."""
     conv_id = (
         await session.execute(
-            select(Conversation.id).where(
-                Conversation.public_id == conversation_public_id
-            )
+            select(Conversation.id).where(Conversation.public_id == conversation_public_id)
         )
     ).scalar_one_or_none()
     if conv_id is None:

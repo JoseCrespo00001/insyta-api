@@ -23,7 +23,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Conversation, Evaluation, Message
 from app.models.reputation import UserReputation
-from app.services.reputation import hash_user_key
+from app.services.report_metrics import is_phone_like
+from app.services.reputation import client_pseudonym, hash_user_key
 
 logger = logging.getLogger(__name__)
 
@@ -31,13 +32,35 @@ logger = logging.getLogger(__name__)
 _EPOCH_CUTOFF = datetime(1971, 1, 1, tzinfo=UTC)
 
 
+def _display_name(contact_name: str | None, external_id: str) -> str:
+    """Nombre a mostrar sin PII: el nombre del contacto si no parece teléfono, si
+    no el pseudónimo (B5)."""
+    if contact_name and not is_phone_like(contact_name):
+        return contact_name
+    return client_pseudonym(external_id)
+
+
+async def resolve_external_id(
+    session: AsyncSession, project_id: uuid.UUID, user_key: str
+) -> str | None:
+    """Encuentra el external_id de un cliente por su user_key (hash), sin exponer
+    el teléfono crudo en la URL. Escanea los external_id del proyecto (acotado)."""
+    rows = (
+        await session.execute(
+            select(Conversation.external_id).where(Conversation.project_id == project_id).distinct()
+        )
+    ).scalars()
+    for ext in rows:
+        if hash_user_key(ext) == user_key:
+            return ext
+    return None
+
+
 def _respectful(rep: UserReputation | None) -> bool:
     if rep is None:
         return True
     return not (
-        rep.usuario_riesgoso
-        or (rep.fraud_attempts or 0) > 0
-        or rep.etiqueta == "problematico"
+        rep.usuario_riesgoso or (rep.fraud_attempts or 0) > 0 or rep.etiqueta == "problematico"
     )
 
 
@@ -105,12 +128,12 @@ async def list_clients(session: AsyncSession, project_id: uuid.UUID) -> list[dic
         rep = rep_by_key.get(hash_user_key(ext))
         out.append(
             {
-                "externalId": ext,
-                "contactName": c["contactName"],
+                # B5: identificamos por user_key (hash) + display pseudónimo; nunca
+                # el teléfono crudo. El front usa userKey para pedir el perfil.
+                "userKey": hash_user_key(ext),
+                "display": _display_name(c["contactName"], ext),
                 "conversations": c["conversations"],
-                "avgScore": (
-                    round(sum(c["scores"]) / len(c["scores"])) if c["scores"] else None
-                ),
+                "avgScore": (round(sum(c["scores"]) / len(c["scores"])) if c["scores"] else None),
                 "avgSatisfaction": (
                     round(sum(c["sats"]) / len(c["sats"]), 1) if c["sats"] else None
                 ),
@@ -207,9 +230,9 @@ async def get_client_profile(
     most_active = max(range(24), key=lambda h: hours[h]) if any(hours) else None
 
     return {
-        "externalId": external_id,
-        "contactName": rows[0].contact_name,
-        "contactPhone": rows[0].contact_phone,
+        # B5: pseudónimo + user_key; sin external_id/teléfono/nombre-crudo.
+        "userKey": hash_user_key(external_id),
+        "display": _display_name(rows[0].contact_name, external_id),
         "conversations": len(rows),
         "avgScore": round(sum(scores) / len(scores)) if scores else None,
         "avgSatisfaction": round(sum(sats) / len(sats), 1) if sats else None,
