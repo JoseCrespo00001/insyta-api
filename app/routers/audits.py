@@ -36,6 +36,7 @@ from app.services.report_format import eval_to_camel
 from app.services.report_metrics import (
     content_signature,
     is_phone_like,
+    needs_intervention,
     satisfaction_bucket,
     visible_score,
 )
@@ -460,7 +461,12 @@ async def get_audit(
         needs_review = bool(ev.requiere_revision_humana) if ev else False
         problematic = (ev.segment == "problematico") if ev else False
         has_critical_verdict = any(v.get("severity") in ("critica", "alta") for v in verdicts)
-        needs_intervention = has_veto or needs_review or has_critical_verdict or problematic
+        intervention = needs_intervention(
+            has_veto=has_veto,
+            needs_review=needs_review,
+            has_critical_verdict=has_critical_verdict,
+            problematic=problematic,
+        )
         if not is_dup:
             for v in verdicts:
                 sev = v.get("severity")
@@ -470,7 +476,7 @@ async def get_audit(
                 with_veto += 1
             if needs_review:
                 needs_review_count += 1
-            if needs_intervention:
+            if intervention:
                 critical_count += 1
         # Score de riesgo para ordenar (mayor = más urgente).
         risk_score = 100 if has_veto else 0
@@ -490,7 +496,7 @@ async def get_audit(
             "satisfaction": sat_bucket,
             "resolved": ev.resolution if ev else None,
             "messageEvaluations": verdicts,
-            "needsIntervention": needs_intervention,
+            "needsIntervention": intervention,
             "reason": _human_reason(ev, verdicts),  # B3: motivo en lenguaje humano
             "riskScore": risk_score,
             "isDuplicate": is_dup,  # B4: visible pero no contado en agregados
@@ -505,7 +511,7 @@ async def get_audit(
         conversations.append(item)
         # B3: failing = las que requieren intervención (VETO/revisión/crítica), no
         # solo "no resueltas".
-        if needs_intervention:
+        if intervention:
             failing.append(item)
 
     conversations.sort(key=lambda c: c["riskScore"], reverse=True)
