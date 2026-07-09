@@ -25,6 +25,12 @@ def hash_user_key(external_id: str) -> str:
     return hashlib.sha256(f"{_USER_SALT}:{external_id}".encode()).hexdigest()[:64]
 
 
+def client_pseudonym(external_id: str) -> str:
+    """Identificador pseudónimo estable para mostrar/exportar sin PII (B5):
+    `cliente #<6 chars del hash>`. No es reversible a teléfono."""
+    return f"cliente #{hash_user_key(external_id)[:6]}"
+
+
 def merge_avg(old_avg: Decimal | float | None, old_count: int, value: float) -> float:
     """Media móvil incremental."""
     if not old_count or old_avg is None:
@@ -61,9 +67,7 @@ async def update_agent_spc(session: AsyncSession, *, agent_id: uuid.UUID) -> Non
     if summary is None:
         return
     rep = (
-        await session.execute(
-            select(AgentReputation).where(AgentReputation.agent_id == agent_id)
-        )
+        await session.execute(select(AgentReputation).where(AgentReputation.agent_id == agent_id))
     ).scalar_one_or_none()
     if rep is None:
         return
@@ -92,9 +96,7 @@ async def get_user_note(
     """Busca la reputación del usuario y devuelve una nota para el judge (o None)."""
     rep = (
         await session.execute(
-            select(
-                UserReputation.usuario_riesgoso, UserReputation.fraud_attempts
-            ).where(
+            select(UserReputation.usuario_riesgoso, UserReputation.fraud_attempts).where(
                 UserReputation.project_id == project_id,
                 UserReputation.user_key == hash_user_key(external_id),
             )
@@ -115,9 +117,7 @@ async def update_agent_reputation(
     has_veto: bool,
 ) -> None:
     rep = (
-        await session.execute(
-            select(AgentReputation).where(AgentReputation.agent_id == agent_id)
-        )
+        await session.execute(select(AgentReputation).where(AgentReputation.agent_id == agent_id))
     ).scalar_one_or_none()
     if rep is None:
         rep = AgentReputation(
@@ -133,9 +133,7 @@ async def update_agent_reputation(
         )
         session.add(rep)
     if score is not None:
-        rep.avg_score = Decimal(
-            str(round(merge_avg(rep.avg_score, rep.score_count, score), 2))
-        )
+        rep.avg_score = Decimal(str(round(merge_avg(rep.avg_score, rep.score_count, score), 2)))
         rep.score_count += 1
     if has_veto:
         rep.veto_count += 1

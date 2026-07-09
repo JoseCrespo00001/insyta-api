@@ -26,18 +26,60 @@ from app.models import (
     Conversation,
     Evaluation,
     Flow,
+    Message,
     MessageEvaluation,
     Project,
     Supervisor,
 )
 from app.services.celery_app import celery_app
 from app.services.report_format import eval_to_camel
+from app.services.report_metrics import (
+    content_signature,
+    is_phone_like,
+    satisfaction_bucket,
+    visible_score,
+)
+from app.services.reputation import client_pseudonym
+
+# Motivo en lenguaje humano de por qué una conversación requiere intervención (B3).
+_VETO_LABELS = {
+    "A1_alucinacion": "Alucinación factual",
+    "A2_riesgo_legal": "Riesgo legal",
+    "A3_pii": "Fuga de datos (PII)",
+    "A4_scope": "Fuera de alcance",
+    "A5_cbu_invalido": "CBU inválido",
+}
+_ISSUE_LABELS = {
+    "alucinacion": "Alucinación",
+    "alcance": "Fuera de alcance",
+    "contradiccion": "Contradicción",
+    "error_politica": "Error de política",
+}
+
+
+def _human_reason(ev: Evaluation | None, verdicts: list[dict]) -> str | None:
+    """Por qué hay que intervenir, en lenguaje humano (calculado en el back — el
+    front lo consume, no lo recalcula)."""
+    if ev is not None and ev.has_veto and ev.veto_flags:
+        firm = (ev.rubric or {}).get("veto_firm", True)
+        tag = "" if firm else " (a confirmar)"
+        parts = [_VETO_LABELS.get(str(f), str(f).replace("_", " ")) for f in ev.veto_flags]
+        return " · ".join(parts) + tag
+    sev = [v for v in verdicts if v.get("severity") in ("critica", "alta")]
+    if sev:
+        it = str(sev[0].get("issueType") or "")
+        label = _ISSUE_LABELS.get(it) or it or "problema"
+        return f"{len(sev)} {label} ({sev[0].get('severity')})"
+    if ev is not None and ev.requiere_revision_humana:
+        return "Requiere revisión humana"
+    if ev is not None and ev.segment == "problematico":
+        return "Conversación problemática"
+    return None
+
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["audits"])
-
-_SATISFACTION_BUCKETS = {5: "satisfecho", 4: "satisfecho", 3: "neutral"}
 
 
 class _Camel(BaseModel):
@@ -78,9 +120,7 @@ class AuditSummary(_Camel):
     status: str
 
 
-async def _resolve_project(
-    session: AsyncSession, public_id: str
-) -> tuple[uuid.UUID, uuid.UUID]:
+async def _resolve_project(session: AsyncSession, public_id: str) -> tuple[uuid.UUID, uuid.UUID]:
     row = (
         await session.execute(
             select(Project.id, Project.org_id).where(Project.public_id == public_id)
@@ -127,23 +167,15 @@ async def create_audit(
     # Si la auditoría no fijó flujo, hereda el del supervisor.
     if flow_id is None and supervisor is not None and supervisor.flow_id is not None:
         frow = (
-            await session.execute(
-                select(Flow.id, Flow.name).where(Flow.id == supervisor.flow_id)
-            )
+            await session.execute(select(Flow.id, Flow.name).where(Flow.id == supervisor.flow_id))
         ).one_or_none()
         if frow is not None:
             flow_id, flow_name = frow.id, frow.name
 
     # Defaults heredados del supervisor cuando el payload no los trae.
-    objective = payload.objective or (
-        supervisor.default_objective if supervisor else None
-    )
-    emphasis = payload.emphasis or (
-        (supervisor.default_emphasis or []) if supervisor else []
-    )
-    free_text = payload.free_text or (
-        (supervisor.default_free_text or "") if supervisor else ""
-    )
+    objective = payload.objective or (supervisor.default_objective if supervisor else None)
+    emphasis = payload.emphasis or ((supervisor.default_emphasis or []) if supervisor else [])
+    free_text = payload.free_text or ((supervisor.default_free_text or "") if supervisor else "")
 
     # Resolve conversation public_ids -> internal ids (scoped to the project).
     conv_rows = (
@@ -156,9 +188,7 @@ async def create_audit(
     ).all()
     conv_ids = [r.id for r in conv_rows]
     if not conv_ids:
-        raise HTTPException(
-            status_code=400, detail="No valid conversations selected for audit"
-        )
+        raise HTTPException(status_code=400, detail="No valid conversations selected for audit")
 
     audit_id = uuid.uuid4()
     public_id = f"aud_{audit_id.hex[:24]}"
@@ -194,9 +224,7 @@ async def create_audit(
     )
     await session.flush()
 
-    celery_app.send_task(
-        "app.workers.audit.run_audit", args=[str(audit_id), str(org_id)]
-    )
+    celery_app.send_task("app.workers.audit.run_audit", args=[str(audit_id), str(org_id)])
     logger.info(
         "[AUDITS] Created %s project=%s convs=%d",
         public_id,
@@ -263,9 +291,7 @@ async def export_audit_csv(
     Identificadas por conversation_id + external_id. Filtro opcional por segmento
     (cliente_ideal | satisfecho | insatisfecho | potencial_lead | ...)."""
     audit_id = (
-        await session.execute(
-            select(Audit.id).where(Audit.public_id == audit_public_id)
-        )
+        await session.execute(select(Audit.id).where(Audit.public_id == audit_public_id))
     ).scalar_one_or_none()
     if audit_id is None:
         raise HTTPException(status_code=404, detail="Audit not found")
@@ -287,12 +313,11 @@ async def export_audit_csv(
     writer.writerow(
         [
             "conversation_id",
-            "external_id",
+            "cliente",  # B5: pseudónimo, nunca el teléfono crudo
             "contacto",
-            "telefono",
             "segmento",
-            "score_final",
-            "score",
+            "score",  # visible (topeado por VETO firme, B1)
+            "score_bruto",
             "resolucion",
             "resumen",
         ]
@@ -301,15 +326,15 @@ async def export_audit_csv(
         seg = ev.segment if ev is not None else None
         if segment and seg != segment:
             continue
+        name = conv.contact_name if not is_phone_like(conv.contact_name) else ""
         writer.writerow(
             [
                 conv.public_id,
-                conv.external_id,
-                conv.contact_name or "",
-                conv.contact_phone or "",
+                client_pseudonym(conv.external_id),
+                name or "",
                 seg or "",
-                ev.score_final if ev is not None else "",
-                ev.score if ev is not None else "",
+                visible_score(ev.score, ev.score_final) if ev is not None else "",
+                ev.score_bruto if ev is not None else "",
                 ("si" if ev.resolution else "no") if ev is not None else "",
                 (ev.summary or "") if ev is not None else "",
             ]
@@ -374,72 +399,87 @@ async def get_audit(
             }
         )
 
+    # B4: contenido por conversación para deduplicar los duplicados de determinismo
+    # en los agregados (Pareto/riesgo). Se cargan una vez, ordenados por seq.
+    conv_ids = [conv.id for conv, _ in conv_rows]
+    content_by_conv: dict[uuid.UUID, list[str]] = {}
+    if conv_ids:
+        crows = await session.execute(
+            select(Message.conversation_id, Message.content)
+            .where(Message.conversation_id.in_(conv_ids))
+            .order_by(Message.conversation_id, Message.seq)
+        )
+        for cr in crows:
+            content_by_conv.setdefault(cr.conversation_id, []).append(cr.content or "")
+
     conversations = []
     failing = []
-    buckets = {"satisfecho": 0, "neutral": 0, "insatisfecho": 0}
-    scores = []
+    buckets = {"satisfecho": 0, "neutral": 0, "insatisfecho": 0}  # fallback B2
+    scores = []  # fallback avgScore
     # Capa de riesgo (separada del score promedio): "¿tengo que intervenir?".
-    risk = {
-        "withVeto": 0,
-        "needsReview": 0,
-        "critical": 0,
-        "bySeverity": {"critica": 0, "alta": 0, "media": 0, "baja": 0},
-    }
+    by_severity: dict[str, int] = {"critica": 0, "alta": 0, "media": 0, "baja": 0}
+    with_veto = 0
+    needs_review_count = 0
+    critical_count = 0
     sev_weight = {"critica": 3, "alta": 2, "media": 1, "baja": 0}
+    seen_sigs: set[str] = set()  # B4
     for conv, ev in conv_rows:
         verdicts = me_by_conv.get(conv.id, [])
-        # El reporte es POR AUDITORÍA: solo las conversaciones que ESTA auditoría
-        # evaluó (tienen verdicts con su audit_id). Sin esto, dos auditorías sobre
-        # las mismas conversaciones comparten la Evaluation (única por conversación)
-        # y muestran el MISMO reporte; y una auditoría fallida "toma prestada" la
-        # evaluación de otra que sí corrió.
+        # Reporte POR AUDITORÍA: solo las conversaciones que ESTA auditoría evaluó
+        # (verdicts con su audit_id). Evita que dos auditorías sobre las mismas
+        # conversaciones muestren el mismo reporte (Evaluation es única por conv).
         if not verdicts:
             continue
+        # B4: duplicados de determinismo → visibles en la lista pero contados una vez.
+        sig = content_signature(content_by_conv.get(conv.id, [conv.preview or ""]))
+        is_dup = sig in seen_sigs
+        seen_sigs.add(sig)
+
+        visible = visible_score(ev.score, ev.score_final) if ev else None  # B1
         sat_bucket = None
         if ev is not None:
-            if ev.score is not None:
-                scores.append(ev.score)
-            sat_bucket = _SATISFACTION_BUCKETS.get(ev.satisfaction or 0, "insatisfecho")
+            if visible is not None:
+                scores.append(visible)
+            sat_bucket = satisfaction_bucket(ev.satisfaction)
             buckets[sat_bucket] += 1
-        for v in verdicts:
-            sev = v.get("severity")
-            if sev in risk["bySeverity"]:
-                risk["bySeverity"][sev] += 1
         has_veto = bool(ev.has_veto) if ev else False
         needs_review = bool(ev.requiere_revision_humana) if ev else False
         problematic = (ev.segment == "problematico") if ev else False
-        has_critical_verdict = any(
-            v.get("severity") in ("critica", "alta") for v in verdicts
-        )
-        needs_intervention = (
-            has_veto or needs_review or has_critical_verdict or problematic
-        )
-        if has_veto:
-            risk["withVeto"] += 1
-        if needs_review:
-            risk["needsReview"] += 1
-        if needs_intervention:
-            risk["critical"] += 1
+        has_critical_verdict = any(v.get("severity") in ("critica", "alta") for v in verdicts)
+        needs_intervention = has_veto or needs_review or has_critical_verdict or problematic
+        if not is_dup:
+            for v in verdicts:
+                sev = v.get("severity")
+                if sev in by_severity:
+                    by_severity[sev] += 1
+            if has_veto:
+                with_veto += 1
+            if needs_review:
+                needs_review_count += 1
+            if needs_intervention:
+                critical_count += 1
         # Score de riesgo para ordenar (mayor = más urgente).
         risk_score = 100 if has_veto else 0
         risk_score += sum(sev_weight.get(v.get("severity"), 0) for v in verdicts)
         risk_score += 5 if needs_review else 0
         risk_score += 10 if problematic else 0
+        # B5: identificador pseudónimo — nunca el teléfono crudo.
+        pseudonym = client_pseudonym(conv.external_id)
+        name = conv.contact_name if not is_phone_like(conv.contact_name) else None
         item = {
             "id": conv.public_id,
-            "externalId": conv.external_id,
-            "contactName": conv.contact_name,
+            "externalId": pseudonym,
+            "contactName": name or pseudonym,
             "preview": conv.preview,
             "messageCount": conv.message_count,
-            "score": ev.score if ev else None,
+            "score": visible,  # B1: score visible (topeado por VETO firme)
             "satisfaction": sat_bucket,
             "resolved": ev.resolution if ev else None,
             "messageEvaluations": verdicts,
             "needsIntervention": needs_intervention,
+            "reason": _human_reason(ev, verdicts),  # B3: motivo en lenguaje humano
             "riskScore": risk_score,
-            # Campos que el contrato Conversation del front espera (ReportView lee
-            # evaluation.*; el workspace lee messages/uploadGroupId al abrir una
-            # fallida — el transcript se hidrata aparte vía /conversations/{id}).
+            "isDuplicate": is_dup,  # B4: visible pero no contado en agregados
             "uploadGroupId": str(conv.upload_id) if conv.upload_id else "",
             "userMessages": 0,
             "botMessages": 0,
@@ -449,11 +489,28 @@ async def get_audit(
             "evaluation": eval_to_camel(ev),
         }
         conversations.append(item)
-        if ev is not None and ev.resolution is False:
+        # B3: failing = las que requieren intervención (VETO/revisión/crítica), no
+        # solo "no resueltas".
+        if needs_intervention:
             failing.append(item)
 
-    # Las que requieren intervención primero (mayor riesgo arriba).
     conversations.sort(key=lambda c: c["riskScore"], reverse=True)
+    failing.sort(key=lambda c: c["riskScore"], reverse=True)
+
+    risk = {
+        "withVeto": with_veto,
+        "needsReview": needs_review_count,
+        "critical": critical_count,
+        "bySeverity": by_severity,
+    }
+
+    # B2: satisfacción + avgScore desde el resumen persistido (fuente ÚNICA que
+    # también consume list_audits → card y chips muestran lo mismo). Fallback live.
+    summary = audit.report_summary or {}
+    satisfaction = summary.get("satisfaction") or buckets
+    avg_score = summary.get("avgScore")
+    if avg_score is None:
+        avg_score = round(sum(scores) / len(scores)) if scores else None
 
     return {
         "id": audit.public_id,
@@ -470,8 +527,8 @@ async def get_audit(
         "errorMessage": audit.error_message,
         "report": {
             "total": len(conversations),
-            "satisfaction": buckets,
-            "avgScore": round(sum(scores) / len(scores)) if scores else None,
+            "satisfaction": satisfaction,
+            "avgScore": avg_score,
             "risk": risk,
             "failing": failing,
             "conversations": conversations,

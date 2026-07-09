@@ -32,6 +32,7 @@ _EMPTY_EVAL: dict = {
     "scoreFinal": None,
     "confidence": None,
     "hasVeto": False,
+    "vetoFirm": False,
     "vetoFlags": [],
     "segment": None,
     "sentimentTrajectory": [],
@@ -68,6 +69,10 @@ def eval_to_camel(ev: Evaluation | None) -> dict:
         "scoreFinal": ev.score_final,
         "confidence": float(ev.confidence) if ev.confidence is not None else None,
         "hasVeto": bool(ev.has_veto),
+        # B7: firme (topea el score) vs tentativo ("a confirmar"). Guardado en el
+        # JSON de rúbrica; data vieja sin la key → firme si hay veto (comportamiento
+        # previo: todo veto topeaba).
+        "vetoFirm": bool((ev.rubric or {}).get("veto_firm", ev.has_veto)),
         "vetoFlags": ev.veto_flags or [],
         "segment": ev.segment,
         "sentimentTrajectory": ev.sentiment_trajectory or [],

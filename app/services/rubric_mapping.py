@@ -35,9 +35,7 @@ def map_eval_to_rubric(
     evidencia representativa (el eval ya juzgó la charla completa).
     """
     # A1 (alucinación) desde los verdicts por mensaje.
-    aluc = next(
-        (v for v in verdicts if getattr(v, "issue_type", None) == "alucinacion"), None
-    )
+    aluc = next((v for v in verdicts if getattr(v, "issue_type", None) == "alucinacion"), None)
     a1_turn = getattr(aluc, "seq", last_turn) if aluc else last_turn
     a1_score = 1 if aluc else 5
 
@@ -51,9 +49,7 @@ def map_eval_to_rubric(
         _dim("A4", 1 if parsed.scope_violation else 5, last_turn, "Alcance/política"),
         _dim("C2", 5 if parsed.resolution else 2, last_turn, "Resolución"),
         _dim("C4", parsed.efficiency, last_turn, "Comprensión/eficiencia"),
-        _dim(
-            "E1", _TONE_TO_SCORE.get(parsed.tone, 3), last_turn, f"Tono {parsed.tone}"
-        ),
+        _dim("E1", _TONE_TO_SCORE.get(parsed.tone, 3), last_turn, f"Tono {parsed.tone}"),
         _dim("E4", parsed.satisfaction, last_turn, "Sentimiento del usuario"),
     ]
 
@@ -65,7 +61,18 @@ def map_eval_to_rubric(
     trajectory = ["neutral", sentiment] if sentiment != "neutral" else [sentiment]
 
     has_signal = bool(veto or fraude_flags)
-    confidence = 0.5 if has_signal else 0.65  # mapeo holístico → confianza moderada
+    # Confianza del veto para B7: la firmeza sale de la fuerza de la señal por
+    # mensaje. Una alucinación alta/critica (o sin severidad — back-compat con
+    # tests/data vieja) es firme y topea el score; baja/media es tentativa
+    # ("a confirmar") y no topea. Los validadores deterministas (CBU/precio) son
+    # firmes aparte, en `compute_scores` (no dependen de esta confianza).
+    if aluc is not None:
+        aluc_sev = getattr(aluc, "severity", None)
+        confidence = 0.4 if aluc_sev in ("baja", "media") else 0.8
+    elif has_signal:
+        confidence = 0.5  # fraude/otra señal sin veto de alucinación concreto
+    else:
+        confidence = 0.65  # limpio: el mapeo del eval holístico es aproximado
 
     return RubricResponse.model_validate(
         {
