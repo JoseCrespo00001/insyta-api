@@ -126,6 +126,10 @@ async def update_agent_reputation(
             org_id=org_id,
             project_id=project_id,
             agent_id=agent_id,
+            # Inicializar en 0: el default de SQLAlchemy recién aplica en el flush,
+            # y acá incrementamos antes de flushear (None += 1 explotaría).
+            score_count=0,
+            veto_count=0,
         )
         session.add(rep)
     if score is not None:
@@ -163,6 +167,9 @@ async def update_user_reputation(
             org_id=org_id,
             project_id=project_id,
             user_key=user_key,
+            # Inicializar en 0 (ver nota en update_agent_reputation).
+            sentiment_count=0,
+            fraud_attempts=0,
         )
         session.add(rep)
     if sentiment is not None:
