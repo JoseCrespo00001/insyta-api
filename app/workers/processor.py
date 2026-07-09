@@ -154,7 +154,10 @@ async def process_conversations(
     new_count = 0
     dup_count = 0
     msg_count = 0
-    for dto in parsed:
+    # Cada N conversaciones escribimos rows_processed para que la barra del front
+    # (polling cada 1200ms) suba gradualmente en vez de saltar de 0 al total.
+    progress_step = 5
+    for i, dto in enumerate(parsed):
         msgs = list(dto.messages)
         async with tenant_txn(org_id) as session:
             conv, was_new = await upsert_conversation_idempotent(
@@ -191,6 +194,11 @@ async def process_conversations(
                 new_count += 1
             else:
                 dup_count += 1
+        # Progreso parcial (fuera de la txn de la conversación, throttled).
+        if upload_id is not None and (i + 1) % progress_step == 0:
+            await _set_upload_status(
+                upload_id, org_id, rows_processed=new_count + dup_count
+            )
     return {
         "new_conversations": new_count,
         "duplicate_conversations": dup_count,
