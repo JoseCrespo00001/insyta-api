@@ -423,6 +423,9 @@ async def get_audit(
     critical_count = 0
     sev_weight = {"critica": 3, "alta": 2, "media": 1, "baja": 0}
     seen_sigs: set[str] = set()  # B4
+    # Eje adversarial (Prompt 3/4): contador live de ataques (repelidos vs cedidos),
+    # fallback si el summary persistido no está. Separado del score de calidad.
+    adv_live: dict = {"total": 0, "repelled": 0, "ceded": 0, "byType": {}}
     for conv, ev in conv_rows:
         verdicts = me_by_conv.get(conv.id, [])
         # Reporte POR AUDITORÍA: solo las conversaciones que ESTA auditoría evaluó
@@ -436,12 +439,23 @@ async def get_audit(
         seen_sigs.add(sig)
 
         visible = visible_score(ev.score, ev.score_final) if ev else None  # B1
+        is_adv = bool(ev.is_adversarial) if ev else False
         sat_bucket = None
-        if ev is not None:
+        # A3: los ataques NO entran en el promedio de satisfacción/score; se
+        # cuentan aparte como repelidos/cedidos.
+        if ev is not None and not is_adv:
             if visible is not None:
                 scores.append(visible)
             sat_bucket = satisfaction_bucket(ev.satisfaction)
             buckets[sat_bucket] += 1
+        if ev is not None and is_adv and not is_dup:
+            adv_live["total"] += 1
+            if ev.attack_repelled:
+                adv_live["repelled"] += 1
+            else:
+                adv_live["ceded"] += 1
+            at = ev.attack_type or "otro"
+            adv_live["byType"][at] = adv_live["byType"].get(at, 0) + 1
         has_veto = bool(ev.has_veto) if ev else False
         needs_review = bool(ev.requiere_revision_humana) if ev else False
         problematic = (ev.segment == "problematico") if ev else False
@@ -497,20 +511,27 @@ async def get_audit(
     conversations.sort(key=lambda c: c["riskScore"], reverse=True)
     failing.sort(key=lambda c: c["riskScore"], reverse=True)
 
+    summary = audit.report_summary or {}
     risk = {
         "withVeto": with_veto,
         "needsReview": needs_review_count,
         "critical": critical_count,
         "bySeverity": by_severity,
+        # Eje adversarial (Prompt 3/4): ataques repelidos vs cedidos, separado del
+        # score de calidad. Preferimos el summary persistido; fallback al live.
+        "adversarial": summary.get("adversarial") or adv_live,
     }
 
     # B2: satisfacción + avgScore desde el resumen persistido (fuente ÚNICA que
     # también consume list_audits → card y chips muestran lo mismo). Fallback live.
-    summary = audit.report_summary or {}
     satisfaction = summary.get("satisfaction") or buckets
     avg_score = summary.get("avgScore")
     if avg_score is None:
         avg_score = round(sum(scores) / len(scores)) if scores else None
+    # A4/A5: resolución (denominador = conversaciones legítimas) y escaladas
+    # correctas vs evitables — server-authoritative desde el summary.
+    resolution = summary.get("resolution")
+    escalations = summary.get("escalations")
 
     return {
         "id": audit.public_id,
@@ -529,6 +550,8 @@ async def get_audit(
             "total": len(conversations),
             "satisfaction": satisfaction,
             "avgScore": avg_score,
+            "resolution": resolution,  # A4: denominador = conversaciones legítimas
+            "escalations": escalations,  # A5: correctas vs evitables
             "risk": risk,
             "failing": failing,
             "conversations": conversations,

@@ -22,6 +22,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    false,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
@@ -36,9 +37,7 @@ class Organization(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     public_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     slug: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
-    org_type: Mapped[str] = mapped_column(
-        String(16), nullable=False, default="customer"
-    )
+    org_type: Mapped[str] = mapped_column(String(16), nullable=False, default="customer")
     plan: Mapped[str] = mapped_column(String(32), nullable=False, default="free")
     white_label_config: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     # API keys de proveedores LLM cargadas desde el front, cifradas (Fernet).
@@ -141,12 +140,8 @@ class Conversation(UUIDPrimaryKeyMixin, SoftDeleteMixin, Base):
     contact_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     contact_phone: Mapped[str | None] = mapped_column(String(64), nullable=True)
     preview: Mapped[str | None] = mapped_column(Text, nullable=True)
-    started_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    ended_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     message_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="active")
     phoenix_trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -157,9 +152,7 @@ class Conversation(UUIDPrimaryKeyMixin, SoftDeleteMixin, Base):
     )
 
     __table_args__ = (
-        UniqueConstraint(
-            "agent_id", "external_id", name="uq_conversations_agent_id_external_id"
-        ),
+        UniqueConstraint("agent_id", "external_id", name="uq_conversations_agent_id_external_id"),
         Index("ix_conversations_project_id_created_at", "project_id", "created_at"),
         Index("ix_conversations_upload_id", "upload_id"),
         Index(
@@ -199,9 +192,7 @@ class Message(UUIDPrimaryKeyMixin, SoftDeleteMixin, Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     content_anonymized: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Multimodal (AUD-3.4): text | audio | image | doc | location.
-    message_type: Mapped[str] = mapped_column(
-        String(16), nullable=False, server_default="text"
-    )
+    message_type: Mapped[str] = mapped_column(String(16), nullable=False, server_default="text")
     # Transcripción de audio/imagen si se procesó (para detectar multimodal ignorado).
     media_transcript: Mapped[str | None] = mapped_column(Text, nullable=True)
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -263,12 +254,24 @@ class Evaluation(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
     confidence: Mapped[Decimal | None] = mapped_column(Numeric(4, 3), nullable=True)
     has_veto: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     veto_flags: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    # ── Eje adversarial (Prompt 3/4) ──────────────────────────────────────────
+    # ¿La conversación es un ataque (jailbreak/inyección/manipulación)? Se mide
+    # aparte de la satisfacción: el input más peligroso no es el cliente más feliz.
+    is_adversarial: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=false())
+    # jailbreak | prompt_injection | manipulacion_legal | manipulacion_precio | otro
+    attack_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # ¿El agente repelió el ataque (True) o cedió (False)? None si no es adversarial.
+    attack_repelled: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    # Confianza detrás de la decisión de VETO (solo cuando hay veto); distinta del
+    # `confidence` general del judge (cobertura de evidencia).
+    veto_confidence: Mapped[Decimal | None] = mapped_column(Numeric(4, 3), nullable=True)
+    # B7 promovido a columna: VETO firme (topea el score) vs tentativo. Antes vivía
+    # solo dentro del JSON de rúbrica; ahora es columna de primera clase.
+    veto_firm: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=false())
     # cliente_ideal | satisfecho | neutral | insatisfecho | potencial_lead | problematico
     segment: Mapped[str | None] = mapped_column(String(24), nullable=True)
     sentiment_trajectory: Mapped[list | None] = mapped_column(JSONB, nullable=True)
-    requiere_revision_humana: Mapped[bool | None] = mapped_column(
-        Boolean, nullable=True
-    )
+    requiere_revision_humana: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     model_used: Mapped[str | None] = mapped_column(String(64), nullable=True)
     tokens_used: Mapped[int | None] = mapped_column(Integer, nullable=True)
     tokens_input: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -277,9 +280,7 @@ class Evaluation(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
     latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     phoenix_trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     phoenix_span_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    evaluated_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    evaluated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (
         Index("ix_evaluations_project_id_evaluated_at", "project_id", "evaluated_at"),
@@ -288,9 +289,16 @@ class Evaluation(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
         Index("ix_evaluations_project_id_segment", "project_id", "segment"),
         Index("ix_evaluations_project_id_has_veto", "project_id", "has_veto"),
         Index("ix_evaluations_project_id_score_final", "project_id", "score_final"),
+        Index("ix_evaluations_project_id_is_adversarial", "project_id", "is_adversarial"),
         CheckConstraint(
             "score IS NULL OR (score >= 0 AND score <= 100)",
             name="score_range",
+        ),
+        CheckConstraint(
+            "attack_type IS NULL OR attack_type IN "
+            "('jailbreak','prompt_injection','manipulacion_legal',"
+            "'manipulacion_precio','otro')",
+            name="attack_type_enum",
         ),
         CheckConstraint(
             "satisfaction IS NULL OR (satisfaction >= 1 AND satisfaction <= 5)",
@@ -311,9 +319,7 @@ class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "users"
 
     public_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
-    supabase_user_id: Mapped[str] = mapped_column(
-        String(64), nullable=False, unique=True
-    )
+    supabase_user_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     email: Mapped[str] = mapped_column(String(254), nullable=False, unique=True)
     full_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     org_id: Mapped[uuid.UUID] = mapped_column(
