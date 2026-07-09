@@ -38,6 +38,11 @@ _EMPTY_EVAL: dict = {
     "sentimentTrajectory": [],
     "requiereRevisionHumana": False,
     "rubric": None,
+    # Eje adversarial (Prompt 3/4).
+    "isAdversarial": False,
+    "attackType": None,
+    "attackRepelled": None,
+    "vetoConfidence": None,
 }
 
 
@@ -69,13 +74,22 @@ def eval_to_camel(ev: Evaluation | None) -> dict:
         "scoreFinal": ev.score_final,
         "confidence": float(ev.confidence) if ev.confidence is not None else None,
         "hasVeto": bool(ev.has_veto),
-        # B7: firme (topea el score) vs tentativo ("a confirmar"). Guardado en el
-        # JSON de rúbrica; data vieja sin la key → firme si hay veto (comportamiento
-        # previo: todo veto topeaba).
-        "vetoFirm": bool((ev.rubric or {}).get("veto_firm", ev.has_veto)),
+        # B7: firme (topea el score) vs tentativo ("a confirmar"). Ahora es columna
+        # (Prompt 3/4); fallback al JSON de rúbrica y a has_veto para objetos sin la
+        # columna materializada (data vieja / tests sin flush).
+        "vetoFirm": bool(
+            ev.veto_firm
+            if ev.veto_firm is not None
+            else (ev.rubric or {}).get("veto_firm", ev.has_veto)
+        ),
         "vetoFlags": ev.veto_flags or [],
         "segment": ev.segment,
         "sentimentTrajectory": ev.sentiment_trajectory or [],
         "requiereRevisionHumana": bool(ev.requiere_revision_humana),
         "rubric": ev.rubric,
+        # Eje adversarial (Prompt 3/4).
+        "isAdversarial": bool(ev.is_adversarial),
+        "attackType": ev.attack_type,
+        "attackRepelled": ev.attack_repelled,
+        "vetoConfidence": (float(ev.veto_confidence) if ev.veto_confidence is not None else None),
     }

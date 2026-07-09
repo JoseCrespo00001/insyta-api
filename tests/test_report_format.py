@@ -14,6 +14,30 @@ def test_none_eval_has_rubric_defaults():
     assert d["hasVeto"] is False
     assert d["vetoFlags"] == []
     assert d["segment"] is None
+    # Eje adversarial (Prompt 3/4): defaults.
+    assert d["isAdversarial"] is False
+    assert d["attackType"] is None
+    assert d["attackRepelled"] is None
+    assert d["vetoConfidence"] is None
+
+
+def test_eval_exposes_adversarial_fields():
+    ev = Evaluation(
+        score=85,
+        satisfaction=5,
+        is_adversarial=True,
+        attack_type="manipulacion_legal",
+        attack_repelled=False,
+        veto_confidence=Decimal("0.90"),
+        veto_firm=True,
+        has_veto=True,
+    )
+    d = eval_to_camel(ev)
+    assert d["isAdversarial"] is True
+    assert d["attackType"] == "manipulacion_legal"
+    assert d["attackRepelled"] is False
+    assert d["vetoConfidence"] == 0.9
+    assert d["vetoFirm"] is True
 
 
 def test_eval_exposes_rubric_fields():

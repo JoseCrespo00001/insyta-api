@@ -52,9 +52,8 @@ from app.services.celery_app import celery_app
 from app.services.fraud import detect_fraud, fraud_flag_names
 from app.services.notifications import create_notification
 from app.services.report_metrics import (
+    build_report_summary,
     content_signature,
-    satisfaction_distribution,
-    visible_score,
 )
 from app.services.reputation import (
     get_user_note,
@@ -65,6 +64,7 @@ from app.services.reputation import (
 from app.services.rubric_mapping import map_eval_to_rubric
 from app.services.rubric_scoring import compute_scores
 from app.services.segmentation import derive_segment
+from app.services.validators.adversarial import detect_adversarial
 from app.services.validators.cbu import find_cbus, validate_cbu
 from app.services.validators.prices import check_prices
 
@@ -282,20 +282,27 @@ async def _persist_improvements(
 
 
 async def _compute_report_summary(session: AsyncSession, conv_ids: list[uuid.UUID]) -> dict:
-    """Fuente ÚNICA del resumen (B2): satisfacción + avgScore. avgScore usa el
-    score VISIBLE (topeado por VETO, B1), no el crudo."""
+    """Fuente ÚNICA del resumen (B2 + eje adversarial). Las conversaciones
+    adversariales NO entran en el promedio de satisfacción/avgScore; se cuentan
+    aparte (repelidos vs cedidos). El denominador de "Resolución %" son las
+    conversaciones legítimas, y las escaladas se parten en correctas vs evitables
+    (A3/A4/A5). La lógica pura vive en `build_report_summary`."""
     if not conv_ids:
-        return {"total": 0, "satisfaction": {}, "avgScore": None}
+        return build_report_summary([], total=0)
     result = await session.execute(
-        select(Evaluation.score, Evaluation.score_final, Evaluation.satisfaction).where(
-            Evaluation.conversation_id.in_(conv_ids)
-        )
+        select(
+            Evaluation.score,
+            Evaluation.score_final,
+            Evaluation.satisfaction,
+            Evaluation.resolution,
+            Evaluation.escalated,
+            Evaluation.scope_violation,
+            Evaluation.is_adversarial,
+            Evaluation.attack_type,
+            Evaluation.attack_repelled,
+        ).where(Evaluation.conversation_id.in_(conv_ids))
     )
-    rows = result.all()
-    scores = [s for r in rows if (s := visible_score(r.score, r.score_final)) is not None]
-    buckets = satisfaction_distribution([r.satisfaction for r in rows])
-    avg = round(sum(scores) / len(scores)) if scores else None
-    return {"total": len(conv_ids), "satisfaction": buckets, "avgScore": avg}
+    return build_report_summary(list(result.all()), total=len(conv_ids))
 
 
 def _det_veto(msgs: list[dict], precios: object) -> list[str]:
@@ -316,14 +323,22 @@ def _det_veto(msgs: list[dict], precios: object) -> list[str]:
 
 
 async def _persist_rubric_columns(
-    session: AsyncSession, conv_id: uuid.UUID, rubric, score, segment: str
+    session: AsyncSession,
+    conv_id: uuid.UUID,
+    rubric,
+    score,
+    segment: str,
+    *,
+    is_adversarial: bool,
+    attack_type: str | None,
+    attack_repelled: bool | None,
 ) -> None:
     await session.execute(
         update(Evaluation)
         .where(Evaluation.conversation_id == conv_id)
         .values(
-            # veto_firm va DENTRO del JSON de rúbrica (sin migración, B7); el front
-            # lo lee para distinguir VETO firme vs tentativo.
+            # veto_firm también va DENTRO del JSON de rúbrica (back-compat con
+            # lectores que aún lo leen del JSONB); además se promueve a columna.
             rubric={**rubric.model_dump(), "veto_firm": score.veto_firm},
             score_bruto=score.score_bruto,
             score_final=score.score_final,
@@ -333,6 +348,12 @@ async def _persist_rubric_columns(
             segment=segment,
             sentiment_trajectory=rubric.sentimiento_trayectoria,
             requiere_revision_humana=rubric.requiere_revision_humana,
+            # Eje adversarial (Prompt 3/4).
+            is_adversarial=is_adversarial,
+            attack_type=attack_type,
+            attack_repelled=attack_repelled,
+            veto_firm=score.veto_firm,
+            veto_confidence=score.confidence if score.has_veto else None,
         )
     )
 
@@ -615,11 +636,29 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
                     for name in fraude_names:
                         issue_counter[f"fraude:{name}"] += 1
                 det_veto = _det_veto(msgs, attached_precios)
+                # Eje adversarial (Prompt 3/4): detección determinista + señal del
+                # judge. Si es un ataque y el bot CEDIÓ (marker determinista o el
+                # judge lo marcó fuera de rol → scope_violation), inyectamos el VETO
+                # firme B1_jailbreak: topea el score y lo manda a segmento
+                # "problematico" (consumidor ya cableado en segmentation.py).
+                adversarial = detect_adversarial(msgs)
+                is_adversarial = adversarial.is_adversarial
+                attack_type = adversarial.attack_type
+                attack_repelled: bool | None = None
+                if is_adversarial:
+                    ceded = adversarial.bot_ceded or bool(new_parsed.scope_violation)
+                    attack_repelled = not ceded
+                    if ceded and "B1_jailbreak" not in det_veto:
+                        det_veto = sorted({*det_veto, "B1_jailbreak"})
                 logger.info(
-                    "[AUDIT] det conv=%s fraude=%s veto_det=%s",
+                    "[AUDIT] det conv=%s fraude=%s veto_det=%s adversarial=%s "
+                    "attack_type=%s repelled=%s",
                     conv.public_id,
                     fraude_names or "-",
                     det_veto or "-",
+                    is_adversarial,
+                    attack_type or "-",
+                    attack_repelled,
                 )
                 last_turn = msgs[-1]["seq"] if msgs else 0
                 rubric = map_eval_to_rubric(
@@ -648,7 +687,16 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
                 )
                 if score.has_veto or bool(fraud_flags) or segment == "problematico":
                     critical_count += 1
-                await _persist_rubric_columns(session, conv_id, rubric, score, segment)
+                await _persist_rubric_columns(
+                    session,
+                    conv_id,
+                    rubric,
+                    score,
+                    segment,
+                    is_adversarial=is_adversarial,
+                    attack_type=attack_type,
+                    attack_repelled=attack_repelled,
+                )
                 is_lead = bool(new_parsed.resolution) and (new_parsed.satisfaction or 0) >= 4
                 await update_agent_reputation(
                     session,

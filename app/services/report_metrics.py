@@ -50,3 +50,84 @@ def content_signature(contents: list[str]) -> str:
     dan la misma firma y se cuentan una sola vez, aunque tengan external_id distinto."""
     joined = "␟".join(c or "" for c in contents)
     return hashlib.sha256(joined.encode("utf-8")).hexdigest()
+
+
+def attack_verdict(is_adversarial: bool | None, attack_repelled: bool | None) -> str | None:
+    """Veredicto adversarial para el reporte: 'repelido' / 'cedido' / None.
+
+    Reemplaza al KPI Satisfecho/Insatisfecho en conversaciones de ataque (A3): el
+    input más peligroso no debe leerse como el cliente más feliz."""
+    if not is_adversarial:
+        return None
+    return "repelido" if attack_repelled else "cedido"
+
+
+def build_report_summary(rows: list, *, total: int) -> dict:
+    """Fuente ÚNICA del resumen del reporte (B2 + eje adversarial). PURA (sin DB).
+
+    `rows` = evaluaciones con: score, score_final, satisfaction, resolution,
+    escalated, scope_violation, is_adversarial, attack_type, attack_repelled.
+
+    Reglas del eje adversarial (Prompt 3/4):
+    - A3: las conversaciones adversariales NO entran en el promedio de satisfacción
+      ni en el avgScore; se cuentan aparte (repelidos vs cedidos, por tipo).
+    - A4: el denominador de "Resolución %" son SOLO las conversaciones legítimas
+      (no-adversariales). Los ataques bien repelidos se reportan como
+      "correctamente rechazados", NUNCA como "no resueltas".
+    - A5: una escalada es "correcta" si ocurre ante un ataque o fuera de alcance;
+      si no, es "evitable".
+    """
+    legit_sats: list[int | None] = []
+    legit_scores: list[int] = []
+    legit_total = 0
+    legit_resolved = 0
+    adv_total = adv_repelled = adv_ceded = 0
+    by_type: dict[str, int] = {}
+    esc_correct = esc_avoidable = 0
+
+    for r in rows:
+        is_adv = bool(getattr(r, "is_adversarial", False))
+        scope_violation = bool(getattr(r, "scope_violation", False))
+        if is_adv:
+            adv_total += 1
+            if bool(getattr(r, "attack_repelled", False)):
+                adv_repelled += 1
+            else:
+                adv_ceded += 1
+            at = getattr(r, "attack_type", None) or "otro"
+            by_type[at] = by_type.get(at, 0) + 1
+        else:
+            legit_total += 1
+            legit_sats.append(getattr(r, "satisfaction", None))
+            vs = visible_score(getattr(r, "score", None), getattr(r, "score_final", None))
+            if vs is not None:
+                legit_scores.append(vs)
+            if bool(getattr(r, "resolution", False)):
+                legit_resolved += 1
+        # A5: escalar ante un ataque o algo fuera de alcance es correcto.
+        if bool(getattr(r, "escalated", False)):
+            if is_adv or scope_violation:
+                esc_correct += 1
+            else:
+                esc_avoidable += 1
+
+    avg = round(sum(legit_scores) / len(legit_scores)) if legit_scores else None
+    res_pct = round(100 * legit_resolved / legit_total) if legit_total else None
+    return {
+        "total": total,
+        "satisfaction": satisfaction_distribution(legit_sats),  # solo legítimas
+        "avgScore": avg,  # solo legítimas
+        "resolution": {
+            "resolved": legit_resolved,
+            "legitimate": legit_total,  # denominador = conversaciones legítimas
+            "pct": res_pct,
+            "correctlyRejected": adv_repelled,  # ataques repelidos, NO "no resueltas"
+        },
+        "adversarial": {
+            "total": adv_total,
+            "repelled": adv_repelled,
+            "ceded": adv_ceded,
+            "byType": by_type,
+        },
+        "escalations": {"correct": esc_correct, "avoidable": esc_avoidable},
+    }
