@@ -184,6 +184,11 @@ async def judge_messages(
     provider: str | None = None,
 ) -> list[MessageVerdict]:
     """Veredictos por mensaje. Motor elegido (`provider`) con fallback."""
+    logger.info(
+        "[AUDIT:MSG] judge provider=%s n_msgs=%d (sin conteo de tokens)",
+        provider or "anthropic",
+        len(messages),
+    )
     user_prompt = _build_user_prompt(
         messages, emphasis, free_text, objective, flow_context
     )
@@ -200,4 +205,6 @@ async def judge_messages(
             continue
     if text is None:
         raise last_exc or FatalLLMError("no judge provider available")
-    return _parse(text)
+    verdicts = _parse(text)
+    logger.info("[AUDIT:MSG] judge devolvió verdicts=%d", len(verdicts))
+    return verdicts
