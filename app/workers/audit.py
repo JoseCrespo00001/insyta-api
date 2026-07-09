@@ -67,6 +67,7 @@ from app.services.segmentation import derive_segment
 from app.services.validators.adversarial import detect_adversarial
 from app.services.validators.cbu import find_cbus, validate_cbu
 from app.services.validators.prices import check_prices
+from app.services.verdict_grounding import guard_verdicts
 
 logger = logging.getLogger(__name__)
 
@@ -467,6 +468,7 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
     router = build_router(provider)
     issue_counter: Counter = Counter()
     critical_count = 0  # convs con VETO / fraude / segmento problemático
+    low_conf_verdicts = 0  # V2: veredictos que citaron un dato inexistente (grounding)
     evaluated = 0
     msg_evals = 0
     # Punto #6: conversaciones que pidieron un camino no cubierto por el flujo.
@@ -577,6 +579,15 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
                     if p
                 ),
             )
+            # V2 (Prompt 4/4): grounding guard. Si un veredicto cita un código/precio
+            # que NO está en la conversación ni en la fuente de verdad (el juez alucinó
+            # en su justificación, ej "LOC_D073"), baja su severidad (→ baja la
+            # confianza aguas abajo) y lo marca para revisión, en vez de exponer el
+            # dato inventado como hecho.
+            conv_text = " ".join(m["content"] or "" for m in msgs)
+            verdicts, conv_low_conf, _ = guard_verdicts(verdicts, conv_text, source_of_truth)
+            if conv_low_conf and not is_dup:  # B4: duplicados cuentan una vez
+                low_conf_verdicts += conv_low_conf
             for v in verdicts:
                 if v.issue_type and not is_dup:  # B4: duplicados cuentan una vez
                     issue_counter[v.issue_type] += 1
@@ -668,6 +679,10 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
                     det_veto=det_veto,
                     fraude_flags=fraude_names,
                 )
+                # V2: si el juez citó un dato inexistente, la conversación va a
+                # revisión humana (aunque no haya otra señal).
+                if conv_low_conf:
+                    rubric = rubric.model_copy(update={"requiere_revision_humana": True})
                 score = compute_scores(
                     rubric,
                     det_veto=det_veto,
@@ -779,6 +794,9 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
 
     async with tenant_txn(org_id) as session:
         summary = await _compute_report_summary(session, conv_ids)
+        # V2: cuántos veredictos se marcaron como baja confianza por citar un dato
+        # inexistente (para el reporte / el número del oral).
+        summary["lowConfidenceVerdicts"] = low_conf_verdicts
         await session.execute(
             update(Audit)
             .where(Audit.id == audit_id)
@@ -792,12 +810,14 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
             )
         )
         logger.info(
-            "[AUDIT] done audit=%s convs=%d evaluated=%d msg_evals=%d criticas=%d status=active",
+            "[AUDIT] done audit=%s convs=%d evaluated=%d msg_evals=%d criticas=%d "
+            "low_conf_verdicts=%d status=active",
             audit_id,
             len(conv_ids),
             evaluated,
             msg_evals,
             critical_count,
+            low_conf_verdicts,
         )
         # Turn each suggestion into a per-flow Improvement (pending) so the
         # dashboard's /improvements view can surface them next to the flow.

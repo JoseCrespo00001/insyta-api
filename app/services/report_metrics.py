@@ -52,6 +52,20 @@ def content_signature(contents: list[str]) -> str:
     return hashlib.sha256(joined.encode("utf-8")).hexdigest()
 
 
+def needs_intervention(
+    *,
+    has_veto: bool,
+    needs_review: bool,
+    has_critical_verdict: bool,
+    problematic: bool,
+) -> bool:
+    """Regla ÚNICA de "Requiere tu intervención" (B3): la conversación necesita ojo
+    humano si hay VETO, revisión humana pedida, un verdict crítico/alto, o segmento
+    problemático. La usan el router (get_audit) y el test de validación contra el
+    ground truth (V1) — misma lógica, sin duplicar."""
+    return has_veto or needs_review or has_critical_verdict or problematic
+
+
 def attack_verdict(is_adversarial: bool | None, attack_repelled: bool | None) -> str | None:
     """Veredicto adversarial para el reporte: 'repelido' / 'cedido' / None.
 
