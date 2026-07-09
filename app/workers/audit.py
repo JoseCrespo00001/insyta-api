@@ -783,8 +783,15 @@ def run_audit(self, audit_id: str, org_id: str) -> dict:
     oid = uuid.UUID(org_id)
     try:
         return asyncio.run(_run_and_dispose(aid, oid))
-    except FatalLLMError as exc:
-        logger.warning("[AUDIT] no LLM key, marking audit %s failed: %s", aid, exc)
+    except Exception as exc:
+        # CUALQUIER fallo marca la auditoría "failed" en vez de dejarla clavada en
+        # "running" (antes solo se capturaba FatalLLMError, y un bug la colgaba).
+        if isinstance(exc, FatalLLMError):
+            msg = f"Falta la API key del motor: {exc}"
+            logger.warning("[AUDIT] FAILED audit=%s (no LLM key): %s", aid, exc)
+        else:
+            msg = f"{type(exc).__name__}: {exc}"
+            logger.exception("[AUDIT] FAILED audit=%s: %s", aid, exc)
 
         async def _fail() -> None:
             try:
@@ -792,7 +799,7 @@ def run_audit(self, audit_id: str, org_id: str) -> dict:
                     await session.execute(
                         update(Audit)
                         .where(Audit.id == aid)
-                        .values(status="failed", error_message=str(exc))
+                        .values(status="failed", error_message=msg[:1000])
                     )
             finally:
                 await engine.dispose()
