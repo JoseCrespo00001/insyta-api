@@ -70,9 +70,7 @@ async def test_run_audit_produces_eval_and_message_evals(monkeypatch):
 
     # Stub both judges so no API key is needed. `_run` usa build_router(provider),
     # no LLMRouter directamente — hay que patchear build_router.
-    monkeypatch.setattr(
-        audit_worker, "build_router", lambda provider=None: _FakeRouter()
-    )
+    monkeypatch.setattr(audit_worker, "build_router", lambda provider=None: _FakeRouter())
 
     async def _fake_judge(messages, *, emphasis=None, free_text=None, **kwargs):
         return [
@@ -87,6 +85,26 @@ async def test_run_audit_produces_eval_and_message_evals(monkeypatch):
         ]
 
     monkeypatch.setattr(audit_worker, "judge_messages", _fake_judge)
+
+    # Prompt 2/4: el audit no tiene flujo → path flowless. Stubeamos la llamada LLM
+    # de sugerencias (el umbral real se testea en test_flowless_suggestions.py). El
+    # fake devuelve una sugerencia con los 4 campos accionables.
+    async def _fake_flowless(stats, examples_by_issue, **kwargs):
+        return [
+            {
+                "issue_type": "alucinacion",
+                "count": 1,
+                "title": "Reducir casos de alucinacion",
+                "impact": "1 mensajes afectados",
+                "detail": "el bot confirmó una promo inexistente",
+                "evidencia": "1 mensaje con alucinación (promo inexistente)",
+                "causa_probable": "el bot confirma promos que no existen",
+                "parche_prompt": "Solo mencioná promos que existan en promos.json.",
+                "como_verificar": "re-auditá issue_type=alucinacion; esperá 0 nuevos",
+            }
+        ]
+
+    monkeypatch.setattr(audit_worker, "generate_flowless_suggestions", _fake_flowless)
 
     eng = create_async_engine(TEST_DATABASE_URL, pool_pre_ping=True)
     factory = async_sessionmaker(eng, expire_on_commit=False)
@@ -200,9 +218,7 @@ async def test_run_audit_produces_eval_and_message_evals(monkeypatch):
         async with factory() as s:
             ev = (
                 await s.execute(
-                    text(
-                        "SELECT score, resolution FROM evaluations WHERE conversation_id = :c"
-                    ),
+                    text("SELECT score, resolution FROM evaluations WHERE conversation_id = :c"),
                     {"c": conv_id},
                 )
             ).one()
@@ -222,20 +238,24 @@ async def test_run_audit_produces_eval_and_message_evals(monkeypatch):
 
             au = (
                 await s.execute(
-                    text(
-                        "SELECT status, report_summary, suggestions FROM audits WHERE id = :a"
-                    ),
+                    text("SELECT status, report_summary, suggestions FROM audits WHERE id = :a"),
                     {"a": audit_id},
                 )
             ).one()
             assert au.status == "active"
             assert au.report_summary["total"] == 1
             assert len(au.suggestions) >= 1
+            # Prompt 2/4: la sugerencia flowless trae los 4 campos accionables.
+            s0 = au.suggestions[0]
+            assert {
+                "evidencia",
+                "causa_probable",
+                "parche_prompt",
+                "como_verificar",
+            } <= set(s0.keys())
     finally:
         async with factory() as s, s.begin():
-            await s.execute(
-                text("DELETE FROM organizations WHERE id = :id"), {"id": org_id}
-            )
+            await s.execute(text("DELETE FROM organizations WHERE id = :id"), {"id": org_id})
         await eng.dispose()
 
 
@@ -290,9 +310,7 @@ async def test_judge_failure_midway_persists_prior_convs_and_does_not_activate(
     monkeypatch.setenv("DATABASE_URL", TEST_DATABASE_URL)
 
     # build_router (lo que usa _run) → router mockeado, sin API key.
-    monkeypatch.setattr(
-        audit_worker, "build_router", lambda provider=None: _FakeRouter()
-    )
+    monkeypatch.setattr(audit_worker, "build_router", lambda provider=None: _FakeRouter())
 
     async def _judge_fails_on_boom(messages, **kwargs):
         if any("BOOM" in (m.get("content") or "") for m in messages):
@@ -406,9 +424,7 @@ async def test_judge_failure_midway_persists_prior_convs_and_does_not_activate(
 
             # El audit NO pasó a 'active' (quedó 'running' — el bloque final no corrió).
             status = (
-                await s.execute(
-                    text("SELECT status FROM audits WHERE id = :a"), {"a": audit_id}
-                )
+                await s.execute(text("SELECT status FROM audits WHERE id = :a"), {"a": audit_id})
             ).scalar_one()
             assert status == "running"
 
@@ -419,7 +435,5 @@ async def test_judge_failure_midway_persists_prior_convs_and_does_not_activate(
             # la eval de BOOM no queda y el audit no pasa a 'active'.
     finally:
         async with factory() as s, s.begin():
-            await s.execute(
-                text("DELETE FROM organizations WHERE id = :id"), {"id": org_id}
-            )
+            await s.execute(text("DELETE FROM organizations WHERE id = :id"), {"id": org_id})
         await eng.dispose()

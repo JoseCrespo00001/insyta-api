@@ -28,7 +28,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.core.db import engine, tenant_txn
 from app.llm.audit_judge import judge_messages
-from app.llm.flow_audit import propose_flow_changes, summarize_flow
+from app.llm.flow_audit import (
+    generate_flowless_suggestions,
+    propose_flow_changes,
+    summarize_flow,
+)
 from app.llm.router import FatalLLMError, build_router
 from app.models import (
     Audit,
@@ -192,10 +196,16 @@ async def _persist_message_evals(
     return len(rows)
 
 
-def _build_suggestions(issue_counter: Counter) -> list[dict]:
+# Prompt 2/4: cuántos ejemplos anonimizados guardamos por patrón para el LLM.
+_EXAMPLES_PER_ISSUE = 2
+
+
+def _build_suggestions(issue_counter: Counter, min_messages: int = 1) -> list[dict]:
+    """Sugerencias templadas (baseline / fallback). S2: filtra categorías con menos
+    de `min_messages` (mata "Reducir casos de otro, 1 mensaje")."""
     suggestions = []
     for issue_type, count in issue_counter.most_common(3):
-        if not issue_type:
+        if not issue_type or count < min_messages:
             continue
         suggestions.append(
             {
@@ -208,6 +218,22 @@ def _build_suggestions(issue_counter: Counter) -> list[dict]:
             }
         )
     return suggestions
+
+
+def _flowless_stats(issue_counter: Counter, min_messages: int, *, limit: int = 3) -> list[dict]:
+    """Patrones accionables para el generador sin-flujo (S1/S2): descarta keys
+    vacías y `otro` (catch-all inaccionable), mantiene `count >= min_messages`,
+    ordena por count desc y corta a `limit`. Incluye `fraude:*` (el parche
+    anti-jailbreak es alto valor). `label` = sin prefijo `fraude:` y `_`→espacio."""
+    stats: list[dict] = []
+    for issue_type, count in issue_counter.most_common():
+        if not issue_type or issue_type == "otro" or count < min_messages:
+            continue
+        label = issue_type.removeprefix("fraude:").replace("_", " ")
+        stats.append({"issue_type": issue_type, "label": label, "count": count})
+        if len(stats) >= limit:
+            break
+    return stats
 
 
 async def _persist_improvements(
@@ -425,6 +451,8 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
     # Punto #6: conversaciones que pidieron un camino no cubierto por el flujo.
     unhandled: list[dict] = []
     unhandled_seen: set = set()
+    # Prompt 2/4: ejemplos ANONIMIZADOS por issue_type, para la evidencia del LLM.
+    examples_by_issue: dict[str, list[dict]] = {}
     agent_ids: set[uuid.UUID] = set()
     # Acumuladores para la línea de métricas GQM al cierre (costo/tokens/cache).
     cost_total = 0.0
@@ -444,6 +472,7 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
             agent_ids.add(conv.agent_id)
             msgs = await _load_messages(session, conv_id)
             seq_to_msg_id = {m["seq"]: m["id"] for m in msgs}
+            seq_to_anon = {m["seq"]: m["content_anonymized"] for m in msgs}
             anon_count = sum(1 for m in msgs if m["content_anonymized"])
             # B4: los duplicados de determinismo se evalúan y quedan visibles, pero
             # cuentan UNA vez en los agregados (issue_counter → Pareto/sugerencias).
@@ -530,6 +559,12 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
             for v in verdicts:
                 if v.issue_type and not is_dup:  # B4: duplicados cuentan una vez
                     issue_counter[v.issue_type] += 1
+                    # Prompt 2/4: guardá hasta N ejemplos ANONIMIZADOS por patrón
+                    # (solo content_anonymized; si está vacío, se saltea — nunca crudo).
+                    snippet = seq_to_anon.get(v.seq)
+                    bucket = examples_by_issue.setdefault(v.issue_type, [])
+                    if snippet and len(bucket) < _EXAMPLES_PER_ISSUE:
+                        bucket.append({"note": v.note or "", "snippet": snippet[:240]})
                 # Conversación que pidió algo fuera del flujo / no resuelto.
                 # Solo valores del enum real del judge (audit_judge.ISSUE_TYPES);
                 # "no_resuelve" no existía en el enum → nunca matcheaba.
@@ -654,10 +689,31 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
                 await update_agent_spc(session, agent_id=aid)
         logger.info("[AUDIT] spc audit=%s agents=%d", audit_id, len(agent_ids))
 
-    suggestions = _build_suggestions(issue_counter)
-    # Punto #6: a partir de las conversaciones no cubiertas, el experto en
-    # Langflow propone nodos/condiciones/agentes concretos para sumar al flujo.
-    if flow_id is not None and flow_summary and unhandled:
+    threshold = get_settings().suggestion_min_messages
+    # S2: baseline templada, filtrada por umbral (mata "otro, 1 mensaje"). También
+    # es el fallback si el generador enriquecido falla.
+    suggestions = _build_suggestions(issue_counter, threshold)
+    if effective_flow_id is None:
+        # Prompt 2/4: SIN flujo cargado → sugerencias accionables de 4 campos
+        # (evidencia, causa_probable, parche_prompt pegable, como_verificar)
+        # generadas por el LLM a partir de los patrones reales de la corrida.
+        stats = _flowless_stats(issue_counter, threshold)
+        try:
+            rich = await generate_flowless_suggestions(
+                stats,
+                examples_by_issue,
+                source_of_truth=source_of_truth,
+                objective=objective_label,
+                company_context=company_context,
+                provider=provider,
+            )
+            if rich:
+                suggestions = rich
+        except Exception as exc:  # no romper la auditoría por las sugerencias
+            logger.warning("[AUDIT] generate_flowless_suggestions falló: %s", exc)
+    elif flow_id is not None and flow_summary and unhandled:
+        # Punto #6: con flujo, el experto en Langflow propone nodos/condiciones/
+        # agentes concretos para sumar al flujo (sugerencias estructurales).
         try:
             structural = await propose_flow_changes(
                 flow_summary,
