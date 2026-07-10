@@ -64,7 +64,9 @@ def _human_reason(ev: Evaluation | None, verdicts: list[dict]) -> str | None:
     if ev is not None and ev.has_veto and ev.veto_flags:
         firm = (ev.rubric or {}).get("veto_firm", True)
         tag = "" if firm else " (a confirmar)"
-        parts = [_VETO_LABELS.get(str(f), str(f).replace("_", " ")) for f in ev.veto_flags]
+        parts = [
+            _VETO_LABELS.get(str(f), str(f).replace("_", " ")) for f in ev.veto_flags
+        ]
         return " · ".join(parts) + tag
     sev = [v for v in verdicts if v.get("severity") in ("critica", "alta")]
     if sev:
@@ -121,7 +123,9 @@ class AuditSummary(_Camel):
     status: str
 
 
-async def _resolve_project(session: AsyncSession, public_id: str) -> tuple[uuid.UUID, uuid.UUID]:
+async def _resolve_project(
+    session: AsyncSession, public_id: str
+) -> tuple[uuid.UUID, uuid.UUID]:
     row = (
         await session.execute(
             select(Project.id, Project.org_id).where(Project.public_id == public_id)
@@ -168,15 +172,23 @@ async def create_audit(
     # Si la auditoría no fijó flujo, hereda el del supervisor.
     if flow_id is None and supervisor is not None and supervisor.flow_id is not None:
         frow = (
-            await session.execute(select(Flow.id, Flow.name).where(Flow.id == supervisor.flow_id))
+            await session.execute(
+                select(Flow.id, Flow.name).where(Flow.id == supervisor.flow_id)
+            )
         ).one_or_none()
         if frow is not None:
             flow_id, flow_name = frow.id, frow.name
 
     # Defaults heredados del supervisor cuando el payload no los trae.
-    objective = payload.objective or (supervisor.default_objective if supervisor else None)
-    emphasis = payload.emphasis or ((supervisor.default_emphasis or []) if supervisor else [])
-    free_text = payload.free_text or ((supervisor.default_free_text or "") if supervisor else "")
+    objective = payload.objective or (
+        supervisor.default_objective if supervisor else None
+    )
+    emphasis = payload.emphasis or (
+        (supervisor.default_emphasis or []) if supervisor else []
+    )
+    free_text = payload.free_text or (
+        (supervisor.default_free_text or "") if supervisor else ""
+    )
 
     # Resolve conversation public_ids -> internal ids (scoped to the project).
     conv_rows = (
@@ -189,7 +201,9 @@ async def create_audit(
     ).all()
     conv_ids = [r.id for r in conv_rows]
     if not conv_ids:
-        raise HTTPException(status_code=400, detail="No valid conversations selected for audit")
+        raise HTTPException(
+            status_code=400, detail="No valid conversations selected for audit"
+        )
 
     audit_id = uuid.uuid4()
     public_id = f"aud_{audit_id.hex[:24]}"
@@ -225,7 +239,9 @@ async def create_audit(
     )
     await session.flush()
 
-    celery_app.send_task("app.workers.audit.run_audit", args=[str(audit_id), str(org_id)])
+    celery_app.send_task(
+        "app.workers.audit.run_audit", args=[str(audit_id), str(org_id)]
+    )
     logger.info(
         "[AUDITS] Created %s project=%s convs=%d",
         public_id,
@@ -272,6 +288,12 @@ async def list_audits(
                 "report": {
                     "total": summary.get("total", 0),
                     "satisfaction": summary.get("satisfaction", {}),
+                    # Data usable para el card de la lista (ya persistida en el
+                    # report_summary): score visible promedio, ataques repelidos/
+                    # cedidos y resolución. Ausentes en auditorías failed/running.
+                    "avgScore": summary.get("avgScore"),
+                    "adversarial": summary.get("adversarial"),
+                    "resolution": summary.get("resolution"),
                     "failing": [],
                     "conversations": [],
                     "suggestions": audit.suggestions or [],
@@ -292,7 +314,9 @@ async def export_audit_csv(
     Identificadas por conversation_id + external_id. Filtro opcional por segmento
     (cliente_ideal | satisfecho | insatisfecho | potencial_lead | ...)."""
     audit_id = (
-        await session.execute(select(Audit.id).where(Audit.public_id == audit_public_id))
+        await session.execute(
+            select(Audit.id).where(Audit.public_id == audit_public_id)
+        )
     ).scalar_one_or_none()
     if audit_id is None:
         raise HTTPException(status_code=404, detail="Audit not found")
@@ -460,7 +484,9 @@ async def get_audit(
         has_veto = bool(ev.has_veto) if ev else False
         needs_review = bool(ev.requiere_revision_humana) if ev else False
         problematic = (ev.segment == "problematico") if ev else False
-        has_critical_verdict = any(v.get("severity") in ("critica", "alta") for v in verdicts)
+        has_critical_verdict = any(
+            v.get("severity") in ("critica", "alta") for v in verdicts
+        )
         intervention = needs_intervention(
             has_veto=has_veto,
             needs_review=needs_review,
