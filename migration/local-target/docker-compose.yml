@@ -1,0 +1,69 @@
+# Réplica LOCAL del stack destino AWS (para probar la migración sin tocar prod):
+#   db      → Postgres (== futuro RDS): schema public (app+RLS) + schema auth (GoTrue)
+#   gotrue  → Auth self-host (== reemplazo de Supabase Auth), JWT HS256
+#   gateway → Caddy que expone /auth/v1/* (== el Kong de Supabase para @supabase/ssr)
+#
+# La app (api/web) se apunta a:  DB=localhost:5544  ·  SUPABASE_URL=http://localhost:8888
+name: insyta-local-target
+
+x-jwt-secret: &jwt_secret "local-shared-jwt-secret-please-change-min-32-chars"
+
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: insyta
+    ports:
+      - "5544:5432" # distinto del dev (5433) para no chocar
+    volumes:
+      - ./db-init.sql:/docker-entrypoint-initdb.d/00-init.sql:ro
+      - lt_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d insyta"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  gotrue:
+    image: supabase/gotrue:v2.151.0
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      GOTRUE_API_HOST: 0.0.0.0
+      PORT: "9999"
+      GOTRUE_DB_DRIVER: postgres
+      # GoTrue gestiona el schema `auth`. Usa el owner local (postgres) para poder
+      # crear/migrar sus tablas.
+      DATABASE_URL: "postgres://postgres:postgres@db:5432/insyta?search_path=auth&sslmode=disable"
+      GOTRUE_SITE_URL: "http://localhost:3000"
+      # URL externa por donde se llega a GoTrue (a través del gateway /auth/v1).
+      API_EXTERNAL_URL: "http://localhost:8888/auth/v1"
+      GOTRUE_URI_ALLOW_LIST: "http://localhost:3000,http://localhost:3000/**"
+      # HS256: mismo secreto que valida el backend (primer camino de auth.py).
+      GOTRUE_JWT_SECRET: *jwt_secret
+      GOTRUE_JWT_EXP: "3600"
+      GOTRUE_JWT_AUD: authenticated
+      GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
+      GOTRUE_JWT_ADMIN_ROLES: service_role
+      GOTRUE_DISABLE_SIGNUP: "false"
+      # Local: sin servidor de mail → autoconfirmar altas (en prod = SES).
+      GOTRUE_MAILER_AUTOCONFIRM: "true"
+      GOTRUE_EXTERNAL_EMAIL_ENABLED: "true"
+      GOTRUE_LOG_LEVEL: info
+    ports:
+      - "9999:9999"
+
+  gateway:
+    image: caddy:2-alpine
+    depends_on:
+      - gotrue
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    ports:
+      - "8888:8888"
+
+volumes:
+  lt_pgdata:

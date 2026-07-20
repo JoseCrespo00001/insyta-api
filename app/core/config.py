@@ -32,6 +32,11 @@ class Settings(BaseSettings):
     # rol dueño `postgres`). El runtime usa `database_url` con un rol sin BYPASSRLS
     # para que las policies RLS se ejerzan. Si no se setea, cae a `database_url`.
     migration_database_url: str | None = None
+    # Marcadores de host que identifican una DB de PRODUCCIÓN, para el guard
+    # NOBYPASSRLS de main.py (que se niega a arrancar con un rol privilegiado
+    # contra prod aunque environment diga development). CSV, config-driven para
+    # cubrir la migración a RDS sin hardcodear el proveedor.
+    prod_db_host_markers: str = "pooler.supabase.com,supabase.co,rds.amazonaws.com"
     supabase_url: str | None = None
     supabase_anon_key: str | None = None
     supabase_service_key: str | None = None

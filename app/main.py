@@ -75,10 +75,7 @@ OPENAPI_TAGS = [
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
-    if (
-        settings.environment != "development"
-        and settings.jwt_secret in WEAK_JWT_SECRETS
-    ):
+    if settings.environment != "development" and settings.jwt_secret in WEAK_JWT_SECRETS:
         raise RuntimeError(
             f"JWT secret not configured (got weak default in environment={settings.environment!r})"
         )
@@ -102,9 +99,10 @@ async def lifespan(app: FastAPI):
             )
         ).one()
     privileged = bool(role.rolsuper or role.rolbypassrls)
-    is_prod_db = (
-        "pooler.supabase.com" in settings.database_url
-        or "supabase.co" in settings.database_url
+    is_prod_db = any(
+        marker in settings.database_url
+        for marker in settings.prod_db_host_markers.split(",")
+        if marker.strip()
     )
     if privileged and (settings.environment != "development" or is_prod_db):
         raise RuntimeError(
@@ -127,9 +125,7 @@ async def lifespan(app: FastAPI):
     logger.info("[SHUTDOWN] Insyta API shutting down")
 
 
-async def _unhandled_exception_handler(
-    request: Request, exc: Exception
-) -> JSONResponse:
+async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     """Hook global de errores: toda excepción NO manejada (un bug, un fallo de
     DB, etc.) se logea con el prefijo [UNHANDLED] + contexto (método/path/tipo)
     para identificarla, y devuelve un 500 limpio sin filtrar detalles internos.
@@ -141,9 +137,7 @@ async def _unhandled_exception_handler(
         type(exc).__name__,
         exc,
     )
-    return JSONResponse(
-        status_code=500, content={"detail": "Error interno del servidor"}
-    )
+    return JSONResponse(status_code=500, content={"detail": "Error interno del servidor"})
 
 
 def create_app() -> FastAPI:

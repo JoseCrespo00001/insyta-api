@@ -1,0 +1,14 @@
+# Gateway fino que replica lo que hace el Kong de Supabase para el cliente
+# @supabase/ssr: expone /auth/v1/* y lo rutea a GoTrue (que sirve en la raíz).
+# La "SUPABASE_URL" local del front = http://localhost:8888
+:8888 {
+	# /auth/v1/token, /auth/v1/user, /auth/v1/signup, /auth/v1/authorize,
+	# /auth/v1/.well-known/jwks.json, etc. → GoTrue en la raíz (handle_path
+	# quita el prefijo /auth/v1).
+	handle_path /auth/v1/* {
+		reverse_proxy gotrue:9999
+	}
+	handle {
+		respond "insyta local gateway" 200
+	}
+}
