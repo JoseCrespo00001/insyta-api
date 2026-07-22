@@ -5,8 +5,8 @@ Scoped guide. Cross-cutting rules + domain glossary are in the repo root
 
 ## Stack
 
-FastAPI · SQLAlchemy 2.0 (async, asyncpg) · Alembic · Celery[redis] · Supabase/Postgres
-(RLS) · Pydantic v2 · Anthropic + OpenAI + **DeepSeek** · Presidio (PII) · OpenTelemetry →
+FastAPI · SQLAlchemy 2.0 (async, asyncpg) · Alembic · Celery[redis] · **AWS RDS Postgres**
+(RLS; auth = GoTrue self-host en el EC2 — migrado de Supabase el 2026-07-21) · Pydantic v2 · Anthropic + OpenAI + **DeepSeek** · Presidio (PII) · OpenTelemetry →
 Phoenix. Package manager: **uv** (`uv sync`, `uv run ...`). Python ≥3.11 (≥3.12 en prod).
 
 ## Cómo arranca / URL
@@ -121,9 +121,9 @@ Reglas para que NUNCA se repita:
 
 ## Uploads (storage)
 
-- El CSV subido va a **Supabase Storage** (bucket privado `uploads`), no a disco local. Helpers en
-  `app/services/uploads_storage.py` (`write_upload`/`read_upload`/`delete_upload_blob`). El worker lo
-  baja por la object key en `uploads.storage_path`. Requiere `SUPABASE_URL` + `SUPABASE_SERVICE_KEY`.
+- El CSV subido se persiste **en Postgres** (`uploads.raw_content`, migración `20260702_1100`) —
+  no hay disco local ni object storage externo. `uploads.storage_path` es una columna dormida
+  (legacy Supabase Storage, eliminado). El worker lee `raw_content` directo de la fila.
 
 ## Don'ts
 
@@ -132,4 +132,4 @@ Reglas para que NUNCA se repita:
 - Don't reintroducir webhooks/SSE/alerts/Beat ad hoc — si los traés, es un vertical slice que
   sigue su ADR (0001/0003/0004/0005).
 - Don't borrar/reiniciar la DB ni escribir migraciones destructivas (ver Soft-delete arriba).
-- Don't volver a persistir uploads en disco local (usar Supabase Storage).
+- Don't volver a persistir uploads en disco local ni reintroducir object storage (van a Postgres `raw_content`).

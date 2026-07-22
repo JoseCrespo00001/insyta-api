@@ -1,7 +1,10 @@
 # docker-compose de producción para EC2 (sa-east-1).
-# Postgres NO está acá: la DB es Supabase (DATABASE_URL en .env).
-# Servicios: redis (broker Celery) + migrate (one-shot) + web (uvicorn) + worker (celery).
+# Postgres NO está acá: la DB es AWS RDS (insyta-prod, DATABASE_URL en .env, ssl=require).
+# Servicios: redis (broker Celery) + migrate (one-shot) + web (uvicorn) + worker (celery)
+#            + gotrue (auth self-host, reemplazo de Supabase Auth — migración 2026-07-21).
 # web y worker comparten la MISMA imagen (build una vez, reuso).
+# El Caddy del HOST (systemd, /etc/caddy/Caddyfile) termina TLS y rutea:
+#   api.insyta.space/auth/v1/* -> gotrue :9999 · el resto -> web :8000 · db.insyta.space -> pgweb.
 
 services:
   redis:
@@ -57,6 +60,46 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+
+  # ── Auth self-host (reemplazo de Supabase Auth) ─────────────────────────────
+  # Portado del baseline probado en migration/local-target/. JWT HS256 firmado con
+  # ${SUPABASE_SERVICE_KEY} (el primer camino de app/core/auth.py). Solo loopback:
+  # lo expone el Caddy del host como api.insyta.space/auth/v1/*. Secretos por
+  # interpolación desde el .env del EC2 (GOTRUE_DB_PASSWORD = password de insyta_master).
+  gotrue:
+    image: supabase/gotrue:v2.151.0
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:9999:9999"
+    environment:
+      GOTRUE_API_HOST: "0.0.0.0"
+      PORT: "9999"
+      GOTRUE_DB_DRIVER: postgres
+      DATABASE_URL: "postgres://insyta_master:${GOTRUE_DB_PASSWORD}@insyta-prod.cl82qao6ee45.sa-east-1.rds.amazonaws.com:5432/insyta?search_path=auth&sslmode=require"
+      GOTRUE_JWT_SECRET: "${SUPABASE_SERVICE_KEY}"
+      GOTRUE_JWT_EXP: "3600"
+      GOTRUE_JWT_AUD: authenticated
+      GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
+      GOTRUE_JWT_ADMIN_ROLES: service_role
+      GOTRUE_SITE_URL: "https://insyta.space"
+      GOTRUE_URI_ALLOW_LIST: "https://insyta.space,https://insyta.space/**,https://www.insyta.space,https://www.insyta.space/**"
+      API_EXTERNAL_URL: "https://api.insyta.space/auth/v1"
+      # apikey NO está en el default CORS de v2.151.0 y @supabase/ssr lo manda en cada
+      # request; sin esto el preflight del browser muere. Lista SIN espacios (GoTrue no trimea).
+      GOTRUE_CORS_ALLOWED_HEADERS: "apikey,x-client-info,x-supabase-api-version,x-supabase-client,x-client-version"
+      GOTRUE_DISABLE_SIGNUP: "false"
+      GOTRUE_EXTERNAL_EMAIL_ENABLED: "true"
+      GOTRUE_MAILER_AUTOCONFIRM: "false"
+      GOTRUE_SMTP_HOST: "smtp.resend.com"
+      GOTRUE_SMTP_PORT: "465"
+      GOTRUE_SMTP_USER: "resend"
+      GOTRUE_SMTP_PASS: "${RESEND_API_KEY}"
+      GOTRUE_SMTP_ADMIN_EMAIL: "alerts@insyta.space"
+      GOTRUE_SMTP_SENDER_NAME: "Insyta"
+      GOTRUE_MAILER_URLPATHS_CONFIRMATION: "/auth/v1/verify"
+      GOTRUE_MAILER_URLPATHS_RECOVERY: "/auth/v1/verify"
+      GOTRUE_MAILER_URLPATHS_EMAIL_CHANGE: "/auth/v1/verify"
+      GOTRUE_LOG_LEVEL: info
 
 volumes:
   redis_data:
