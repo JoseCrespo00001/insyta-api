@@ -18,17 +18,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.auth import CurrentUser, get_current_user
 from app.core.db import get_db_with_tenant_context
 from app.models import Organization
+from app.services.llm_keys import PROVIDER_KEY_COLUMNS
 from app.services.secret_crypto import decrypt_secret, encrypt_secret, mask_secret
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["settings"])
 
-# provider -> columna cifrada en organizations
-_PROVIDER_COL = {
-    "anthropic": "anthropic_api_key_encrypted",
-    "deepseek": "deepseek_api_key_encrypted",
-}
+# provider -> columna cifrada en organizations (fuente única: services/llm_keys).
+_PROVIDER_COL = PROVIDER_KEY_COLUMNS
 
 
 class _Camel(BaseModel):

@@ -22,6 +22,16 @@ from sqlalchemy.ext.asyncio import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _reset_rate_limiter():
+    """Los contadores del limiter (slowapi, in-memory) son globales al proceso:
+    sin este reset, los POSTs acumulados de un test dispararían 429 en otro."""
+    from app.core.ratelimit import limiter
+
+    limiter.reset()
+    yield
+
+
 @pytest_asyncio.fixture(autouse=True)
 async def _dispose_module_engine():
     """Dispose the module-level async engine after each test so its pooled

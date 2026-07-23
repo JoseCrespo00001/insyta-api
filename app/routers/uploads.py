@@ -20,6 +20,7 @@ from fastapi import (
     File,
     Form,
     HTTPException,
+    Request,
     UploadFile,
     status,
 )
@@ -29,6 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import CurrentUser, get_current_user
 from app.core.db import get_db_with_tenant_context
+from app.core.ratelimit import limiter
 from app.models import Agent, Project, Upload
 from app.services.celery_app import celery_app
 from app.services.soft_delete import soft_delete_upload
@@ -87,7 +89,9 @@ class UploadStatusResponse(BaseModel):
     response_model=UploadCreatedResponse,
     status_code=status.HTTP_202_ACCEPTED,
 )
+@limiter.limit("20/minute")
 async def create_upload(
+    request: Request,
     project_public_id: str = Form(...),
     file: UploadFile = File(...),
     current_user: CurrentUser = Depends(get_current_user),

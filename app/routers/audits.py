@@ -12,7 +12,7 @@ import io
 import logging
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel
@@ -20,6 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
+from app.core.ratelimit import limiter
 from app.models import (
     Audit,
     AuditConversation,
@@ -28,10 +29,12 @@ from app.models import (
     Flow,
     Message,
     MessageEvaluation,
+    Organization,
     Project,
     Supervisor,
 )
 from app.services.celery_app import celery_app
+from app.services.llm_keys import get_org_llm_key, missing_key_detail
 from app.services.report_format import eval_to_camel
 from app.services.report_metrics import (
     content_signature,
@@ -141,12 +144,25 @@ async def _resolve_project(
     response_model=AuditCreated,
     status_code=status.HTTP_202_ACCEPTED,
 )
+@limiter.limit("10/minute")
 async def create_audit(
+    request: Request,
     project_public_id: str,
     payload: AuditPayload,
     session: AsyncSession = Depends(get_db_with_tenant_context),
 ) -> AuditCreated:
     project_id, org_id = await _resolve_project(session, project_public_id)
+    provider = payload.provider or "anthropic"
+
+    # Guard 402 (fail-fast, ANTES de encolar): sin API key propia del motor
+    # elegido no se corre nada — la key de plataforma del .env NUNCA se usa
+    # para tenants (ver app/llm/credentials.py, sin fallback).
+    org = await session.get(Organization, org_id)
+    if not get_org_llm_key(org, provider):
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail=missing_key_detail(provider),
+        )
 
     # Supervisor (opcional): aporta flow + defaults de objetivo/énfasis/free_text.
     supervisor = None
@@ -216,7 +232,7 @@ async def create_audit(
         supervisor_id=supervisor.id if supervisor else None,
         name=(payload.name or "").strip() or f"Auditoría — {flow_name or 'flujo'}",
         objective=(objective or None),
-        provider=(payload.provider or "anthropic"),
+        provider=provider,
         emphasis=emphasis,
         free_text=free_text,
         status="running",

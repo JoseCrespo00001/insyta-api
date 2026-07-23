@@ -519,16 +519,20 @@ async def audit_flow_endpoint(
     if flow is None:
         raise HTTPException(status_code=404, detail="Flow not found")
 
-    # Cargar y aplicar la API key del tenant (cifrada).
-    org = await session.get(Organization, current_user.org_id)
-    enc = org.anthropic_api_key_encrypted if org else None
-    if enc:
-        from app.llm.credentials import set_llm_keys
-        from app.services.secret_crypto import decrypt_secret
+    # Guard 402 (fail-fast): la key por-org es obligatoria — sin ella no se
+    # llama al LLM (la key de plataforma del .env nunca se usa para tenants).
+    from app.services.llm_keys import get_org_llm_key, missing_key_detail
 
-        decrypted = decrypt_secret(enc)
-        if decrypted:
-            set_llm_keys(anthropic=decrypted)
+    org = await session.get(Organization, current_user.org_id)
+    key = get_org_llm_key(org, "anthropic")
+    if not key:
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail=missing_key_detail("anthropic"),
+        )
+    from app.llm.credentials import set_llm_keys
+
+    set_llm_keys(anthropic=key)
 
     from app.llm.audit_judge import FatalLLMError
     from app.llm.flow_audit import audit_flow
@@ -539,5 +543,5 @@ async def audit_flow_endpoint(
     except FatalLLMError as exc:
         raise HTTPException(
             status_code=400,
-            detail="Falta la API key de Anthropic. Cargala en Perfil → Extensiones.",
+            detail="La API key de Anthropic configurada no es válida o el proveedor rechazó la llamada.",
         ) from exc

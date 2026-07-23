@@ -5,8 +5,10 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from slowapi.errors import RateLimitExceeded
 
 from app.core.config import WEAK_JWT_SECRETS, get_settings
+from app.core.ratelimit import limiter
 from app.routers import (
     audits,
     auth,
@@ -75,7 +77,10 @@ OPENAPI_TAGS = [
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
-    if settings.environment != "development" and settings.jwt_secret in WEAK_JWT_SECRETS:
+    if (
+        settings.environment != "development"
+        and settings.jwt_secret in WEAK_JWT_SECRETS
+    ):
         raise RuntimeError(
             f"JWT secret not configured (got weak default in environment={settings.environment!r})"
         )
@@ -125,7 +130,9 @@ async def lifespan(app: FastAPI):
     logger.info("[SHUTDOWN] Insyta API shutting down")
 
 
-async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+async def _unhandled_exception_handler(
+    request: Request, exc: Exception
+) -> JSONResponse:
     """Hook global de errores: toda excepción NO manejada (un bug, un fallo de
     DB, etc.) se logea con el prefijo [UNHANDLED] + contexto (método/path/tipo)
     para identificarla, y devuelve un 500 limpio sin filtrar detalles internos.
@@ -137,7 +144,27 @@ async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSON
         type(exc).__name__,
         exc,
     )
-    return JSONResponse(status_code=500, content={"detail": "Error interno del servidor"})
+    return JSONResponse(
+        status_code=500, content={"detail": "Error interno del servidor"}
+    )
+
+
+async def _rate_limit_handler(request: Request, exc: Exception) -> JSONResponse:
+    """429 con detail en español. `exc` es RateLimitExceeded (registrado abajo);
+    se tipa como Exception para cumplir la firma de add_exception_handler."""
+    detail = getattr(exc, "detail", "límite excedido")
+    logger.warning(
+        "[RATE_LIMIT] %s %s -> 429 (%s)",
+        request.method,
+        request.url.path,
+        detail,
+    )
+    return JSONResponse(
+        status_code=429,
+        content={
+            "detail": f"Demasiadas solicitudes ({detail}). Esperá un momento y reintentá."
+        },
+    )
 
 
 def create_app() -> FastAPI:
@@ -183,6 +210,12 @@ def create_app() -> FastAPI:
 
     # Hook global de errores (ver _unhandled_exception_handler).
     app.add_exception_handler(Exception, _unhandled_exception_handler)
+
+    # Rate limiting (slowapi): límites por IP declarados por endpoint con
+    # @limiter.limit(...) en los routers (bootstrap/audits/uploads). El limiter
+    # vive en app.state (slowapi lo busca ahí) y el 429 devuelve JSON en español.
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_handler)
 
     app.include_router(health.router)
     app.include_router(auth.router)

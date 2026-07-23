@@ -172,7 +172,7 @@ async def audit_flow(flow_json: dict, *, mode: str = "standard") -> dict:
 
     key = get_anthropic_key()
     if not key:
-        raise FatalLLMError("ANTHROPIC_API_KEY not set")
+        raise FatalLLMError("API key de Anthropic no configurada para la organización (sin fallback a la key de plataforma)")
 
     # El conocimiento (skill file) va en un bloque con cache_control para abaratar
     # auditorías repetidas; las instrucciones de formato/modo, en otro bloque.
@@ -247,7 +247,7 @@ async def _complete(system: str, user: str, *, max_tokens: int, provider: str) -
 
         key = get_deepseek_key()
         if not key:
-            raise FatalLLMError("DEEPSEEK_API_KEY not set")
+            raise FatalLLMError("API key de DeepSeek no configurada para la organización (sin fallback a la key de plataforma)")
         client = AsyncOpenAI(api_key=key, base_url=DEEPSEEK_BASE_URL)
         try:
             resp = await client.chat.completions.create(
@@ -269,7 +269,7 @@ async def _complete(system: str, user: str, *, max_tokens: int, provider: str) -
 
     key = get_anthropic_key()
     if not key:
-        raise FatalLLMError("ANTHROPIC_API_KEY not set")
+        raise FatalLLMError("API key de Anthropic no configurada para la organización (sin fallback a la key de plataforma)")
     client = AsyncAnthropic(api_key=key)
     try:
         resp = await client.messages.create(

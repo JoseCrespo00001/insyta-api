@@ -90,7 +90,7 @@ class AnthropicProvider:
 
             key = get_anthropic_key()
             if not key:
-                raise FatalLLMError("ANTHROPIC_API_KEY not set")
+                raise FatalLLMError("API key de Anthropic no configurada para la organización (sin fallback a la key de plataforma)")
             self._client = AsyncAnthropic(api_key=key)
         return self._client
 
@@ -178,7 +178,7 @@ class OpenAIProvider:
 
             key = get_openai_key()
             if not key:
-                raise FatalLLMError("OPENAI_API_KEY not set")
+                raise FatalLLMError("API key de OpenAI no configurada para la organización (sin fallback a la key de plataforma)")
             self._client = AsyncOpenAI(api_key=key)
         return self._client
 
@@ -260,7 +260,7 @@ class DeepSeekProvider(OpenAIProvider):
 
             key = get_deepseek_key()
             if not key:
-                raise FatalLLMError("DEEPSEEK_API_KEY not set")
+                raise FatalLLMError("API key de DeepSeek no configurada para la organización (sin fallback a la key de plataforma)")
             self._client = AsyncOpenAI(api_key=key, base_url=DEEPSEEK_BASE_URL)
         return self._client
 

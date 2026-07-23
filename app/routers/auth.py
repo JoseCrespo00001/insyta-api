@@ -14,12 +14,13 @@ import logging
 import re
 import uuid
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 from sqlalchemy import select, text
 
 from app.core.auth import TokenIdentity, get_token_identity
 from app.core.db import async_session_factory
+from app.core.ratelimit import limiter
 from app.models import Organization, User
 
 logger = logging.getLogger(__name__)
@@ -40,7 +41,9 @@ def _slugify(value: str) -> str:
 
 
 @router.post("/bootstrap", response_model=BootstrapResponse)
+@limiter.limit("10/minute")  # signup abierto: frena bootstraps masivos por IP
 async def bootstrap(
+    request: Request,
     identity: TokenIdentity = Depends(get_token_identity),
 ) -> BootstrapResponse:
     async with async_session_factory() as session:

@@ -89,7 +89,12 @@ services:
       GOTRUE_CORS_ALLOWED_HEADERS: "apikey,x-client-info,x-supabase-api-version,x-supabase-client,x-client-version"
       GOTRUE_DISABLE_SIGNUP: "false"
       GOTRUE_EXTERNAL_EMAIL_ENABLED: "true"
-      GOTRUE_MAILER_AUTOCONFIRM: "false"
+      # AUTOCONFIRM=true: el RESEND_API_KEY del .env es un placeholder (nunca hubo
+      # cuenta Resend real) → el mail de confirmación falla con 535 y rompe el signup.
+      # Sin mail, el alta entra directo. El abuso lo contienen el 402 sin API key
+      # propia + rate limiting. TODO: cuenta Resend real + dominio verificado →
+      # volver a "false" (y habilita recovery de password).
+      GOTRUE_MAILER_AUTOCONFIRM: "true"
       GOTRUE_SMTP_HOST: "smtp.resend.com"
       GOTRUE_SMTP_PORT: "465"
       GOTRUE_SMTP_USER: "resend"

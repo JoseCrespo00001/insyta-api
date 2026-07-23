@@ -1,14 +1,15 @@
-"""Override de credenciales LLM por contexto de ejecución.
+"""Credenciales LLM por contexto de ejecución (SOLO keys por-org).
 
-Permite que `run_audit` use la API key que el tenant cargó desde el front (por-org)
-en vez de la global de entorno. Si no hay override, cae a `settings`.
+`run_audit` y el flow-audit setean vía `set_llm_keys` la API key que el tenant
+cargó desde el front (cifrada en `organizations.*_api_key_encrypted`). Los
+getters devuelven ÚNICAMENTE ese override: NO hay fallback a la key de
+plataforma del `.env` — una org sin key propia no puede gastar la del entorno
+(los providers fallan con FatalLLMError y el endpoint corta antes con 402).
 """
 
 from __future__ import annotations
 
 from contextvars import ContextVar
-
-from app.core.config import get_settings
 
 _anthropic: ContextVar[str | None] = ContextVar("anthropic_key", default=None)
 _openai: ContextVar[str | None] = ContextVar("openai_key", default=None)
@@ -33,12 +34,12 @@ def set_llm_keys(
 
 
 def get_anthropic_key() -> str | None:
-    return _anthropic.get() or get_settings().anthropic_api_key
+    return _anthropic.get()
 
 
 def get_openai_key() -> str | None:
-    return _openai.get() or get_settings().openai_api_key
+    return _openai.get()
 
 
 def get_deepseek_key() -> str | None:
-    return _deepseek.get() or get_settings().deepseek_api_key
+    return _deepseek.get()

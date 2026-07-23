@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.core.db import engine, tenant_txn
 from app.llm.audit_judge import judge_messages
+from app.llm.credentials import set_llm_keys
 from app.llm.flow_audit import (
     generate_flowless_suggestions,
     propose_flow_changes,
@@ -50,6 +51,7 @@ from app.models import (
 )
 from app.services.celery_app import celery_app
 from app.services.fraud import detect_fraud, fraud_flag_names
+from app.services.llm_keys import get_org_llm_key, missing_key_detail
 from app.services.notifications import create_notification
 from app.services.report_metrics import (
     build_report_summary,
@@ -94,7 +96,9 @@ async def _load_audit_conversations(
     if audit is None:
         raise ValueError(f"audit {audit_id} not found")
     rows = await session.execute(
-        select(AuditConversation.conversation_id).where(AuditConversation.audit_id == audit_id)
+        select(AuditConversation.conversation_id).where(
+            AuditConversation.audit_id == audit_id
+        )
     )
     return audit, [r[0] for r in rows]
 
@@ -221,7 +225,9 @@ def _build_suggestions(issue_counter: Counter, min_messages: int = 1) -> list[di
     return suggestions
 
 
-def _flowless_stats(issue_counter: Counter, min_messages: int, *, limit: int = 3) -> list[dict]:
+def _flowless_stats(
+    issue_counter: Counter, min_messages: int, *, limit: int = 3
+) -> list[dict]:
     """Patrones accionables para el generador sin-flujo (S1/S2): descarta keys
     vacías y `otro` (catch-all inaccionable), mantiene `count >= min_messages`,
     ordena por count desc y corta a `limit`. Incluye `fraude:*` (el parche
@@ -282,7 +288,9 @@ async def _persist_improvements(
         )
 
 
-async def _compute_report_summary(session: AsyncSession, conv_ids: list[uuid.UUID]) -> dict:
+async def _compute_report_summary(
+    session: AsyncSession, conv_ids: list[uuid.UUID]
+) -> dict:
     """Fuente ÚNICA del resumen (B2 + eje adversarial). Las conversaciones
     adversariales NO entran en el promedio de satisfacción/avgScore; se cuentan
     aparte (repelidos vs cedidos). El denominador de "Resolución %" son las
@@ -401,21 +409,26 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
             provider,
             len(conv_ids),
         )
-        # API keys del tenant (cifradas) según el motor elegido.
+        # API keys del tenant (cifradas → descifradas). SOLO keys por-org: la
+        # key de plataforma del .env no existe como fallback (credentials.py).
         org = await session.get(Organization, org_id)
-        org_key_enc = org.anthropic_api_key_encrypted if org else None
-        org_ds_enc = org.deepseek_api_key_encrypted if org else None
+        org_anthropic_key = get_org_llm_key(org, "anthropic")
+        org_deepseek_key = get_org_llm_key(org, "deepseek")
         # Contexto para el judge: objetivo + knowledge/fuente de verdad + flujo.
         # El Supervisor (si la auditoría lo eligió) es el cerebro: aporta
         # knowledge_base + attached_data (fuente de verdad) y puede aportar el flow.
         supervisor = (
-            await session.get(Supervisor, audit.supervisor_id) if audit.supervisor_id else None
+            await session.get(Supervisor, audit.supervisor_id)
+            if audit.supervisor_id
+            else None
         )
         project = await session.get(Project, project_id)
         project_public_id = project.public_id if project else None
         # knowledge del supervisor pisa el company_context legacy del proyecto.
         company_context = (
-            supervisor.knowledge_base if supervisor and supervisor.knowledge_base else None
+            supervisor.knowledge_base
+            if supervisor and supervisor.knowledge_base
+            else None
         ) or (project.company_context if project else None)
         attached_data = supervisor.attached_data if supervisor else None
         source_of_truth = _format_source_of_truth(attached_data)
@@ -437,7 +450,9 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
     if source_of_truth:
         ctx_parts.append(source_of_truth)
     if flow_summary:
-        ctx_parts.append(f"FLUJO ESPERADO (lo que el agente debería hacer):\n{flow_summary}")
+        ctx_parts.append(
+            f"FLUJO ESPERADO (lo que el agente debería hacer):\n{flow_summary}"
+        )
     eval_context = "\n\n".join(ctx_parts) or None
     logger.info(
         "[AUDIT] contexto audit=%s supervisor=%s fuente_verdad=%s flow=%s objetivo=%s ctx_chars=%d",
@@ -449,20 +464,20 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
         len(eval_context or ""),
     )
 
-    if org_key_enc or org_ds_enc:
-        from app.llm.credentials import set_llm_keys
-        from app.services.secret_crypto import decrypt_secret
+    # Defensa en profundidad: si al momento de ejecutar la org no tiene key
+    # propia del motor elegido, el audit falla acá con un error claro (run_audit
+    # lo marca "failed") — NUNCA se cae a la key de plataforma del entorno.
+    required_key = org_deepseek_key if provider == "deepseek" else org_anthropic_key
+    if not required_key:
+        raise FatalLLMError(missing_key_detail(provider))
 
-        set_llm_keys(
-            anthropic=decrypt_secret(org_key_enc) if org_key_enc else None,
-            deepseek=decrypt_secret(org_ds_enc) if org_ds_enc else None,
-        )
+    set_llm_keys(anthropic=org_anthropic_key, deepseek=org_deepseek_key)
 
     logger.info(
         "[AUDIT] llm_keys audit=%s anthropic=%s deepseek=%s",
         audit_id,
-        bool(org_key_enc),
-        bool(org_ds_enc),
+        bool(org_anthropic_key),
+        bool(org_deepseek_key),
     )
 
     router = build_router(provider)
@@ -508,7 +523,9 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
             user_hist = await get_user_note(
                 session, project_id=conv.project_id, external_id=conv.external_id
             )
-            conv_context = "\n\n".join(p for p in (eval_context, user_hist) if p) or None
+            conv_context = (
+                "\n\n".join(p for p in (eval_context, user_hist) if p) or None
+            )
             logger.info(
                 "[AUDIT] conv=%s msgs=%d anon=%d/%d user_hist=%s",
                 conv.public_id,
@@ -585,7 +602,9 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
             # confianza aguas abajo) y lo marca para revisión, en vez de exponer el
             # dato inventado como hecho.
             conv_text = " ".join(m["content"] or "" for m in msgs)
-            verdicts, conv_low_conf, _ = guard_verdicts(verdicts, conv_text, source_of_truth)
+            verdicts, conv_low_conf, _ = guard_verdicts(
+                verdicts, conv_text, source_of_truth
+            )
             if conv_low_conf and not is_dup:  # B4: duplicados cuentan una vez
                 low_conf_verdicts += conv_low_conf
             for v in verdicts:
@@ -682,7 +701,9 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
                 # V2: si el juez citó un dato inexistente, la conversación va a
                 # revisión humana (aunque no haya otra señal).
                 if conv_low_conf:
-                    rubric = rubric.model_copy(update={"requiere_revision_humana": True})
+                    rubric = rubric.model_copy(
+                        update={"requiere_revision_humana": True}
+                    )
                 score = compute_scores(
                     rubric,
                     det_veto=det_veto,
@@ -712,7 +733,9 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
                     attack_type=attack_type,
                     attack_repelled=attack_repelled,
                 )
-                is_lead = bool(new_parsed.resolution) and (new_parsed.satisfaction or 0) >= 4
+                is_lead = (
+                    bool(new_parsed.resolution) and (new_parsed.satisfaction or 0) >= 4
+                )
                 await update_agent_reputation(
                     session,
                     agent_id=conv.agent_id,
@@ -742,7 +765,9 @@ async def _run(audit_id: uuid.UUID, org_id: uuid.UUID) -> dict:
             # conversación a conversación en vez de saltar de 0 a 100.
             processed += 1
             await session.execute(
-                update(Audit).where(Audit.id == audit_id).values(evaluated_count=processed)
+                update(Audit)
+                .where(Audit.id == audit_id)
+                .values(evaluated_count=processed)
             )
 
     # SPC: recalcular baseline + tendencia (deriva) de cada agente auditado.

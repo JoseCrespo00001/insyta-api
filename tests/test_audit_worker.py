@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.llm.audit_judge import MessageVerdict
 from app.llm.router import FatalLLMError
 from app.llm.schemas import EvaluationResponse, LLMUsage
+from app.services.secret_crypto import encrypt_secret
 from app.workers import audit as audit_worker
 
 TEST_DATABASE_URL = os.getenv(
@@ -70,7 +71,9 @@ async def test_run_audit_produces_eval_and_message_evals(monkeypatch):
 
     # Stub both judges so no API key is needed. `_run` usa build_router(provider),
     # no LLMRouter directamente — hay que patchear build_router.
-    monkeypatch.setattr(audit_worker, "build_router", lambda provider=None: _FakeRouter())
+    monkeypatch.setattr(
+        audit_worker, "build_router", lambda provider=None: _FakeRouter()
+    )
 
     async def _fake_judge(messages, *, emphasis=None, free_text=None, **kwargs):
         return [
@@ -115,15 +118,19 @@ async def test_run_audit_produces_eval_and_message_evals(monkeypatch):
     audit_id = uuid.uuid4()
     try:
         async with factory() as s, s.begin():
+            # El worker exige key por-org (sin fallback a la key de plataforma):
+            # se seedea una key cifrada aunque el router LLM esté mockeado.
             await s.execute(
                 text(
-                    "INSERT INTO organizations(id, public_id, slug, name) "
-                    "VALUES (:id, :pid, :slug, 'Org')"
+                    "INSERT INTO organizations"
+                    "(id, public_id, slug, name, anthropic_api_key_encrypted) "
+                    "VALUES (:id, :pid, :slug, 'Org', :akey)"
                 ),
                 {
                     "id": org_id,
                     "pid": f"org_{org_id.hex[:16]}",
                     "slug": f"o-{org_id.hex[:6]}",
+                    "akey": encrypt_secret("sk-ant-test-org-key-000000000000"),
                 },
             )
             await s.execute(
@@ -218,7 +225,9 @@ async def test_run_audit_produces_eval_and_message_evals(monkeypatch):
         async with factory() as s:
             ev = (
                 await s.execute(
-                    text("SELECT score, resolution FROM evaluations WHERE conversation_id = :c"),
+                    text(
+                        "SELECT score, resolution FROM evaluations WHERE conversation_id = :c"
+                    ),
                     {"c": conv_id},
                 )
             ).one()
@@ -238,7 +247,9 @@ async def test_run_audit_produces_eval_and_message_evals(monkeypatch):
 
             au = (
                 await s.execute(
-                    text("SELECT status, report_summary, suggestions FROM audits WHERE id = :a"),
+                    text(
+                        "SELECT status, report_summary, suggestions FROM audits WHERE id = :a"
+                    ),
                     {"a": audit_id},
                 )
             ).one()
@@ -255,7 +266,9 @@ async def test_run_audit_produces_eval_and_message_evals(monkeypatch):
             } <= set(s0.keys())
     finally:
         async with factory() as s, s.begin():
-            await s.execute(text("DELETE FROM organizations WHERE id = :id"), {"id": org_id})
+            await s.execute(
+                text("DELETE FROM organizations WHERE id = :id"), {"id": org_id}
+            )
         await eng.dispose()
 
 
@@ -310,7 +323,9 @@ async def test_judge_failure_midway_persists_prior_convs_and_does_not_activate(
     monkeypatch.setenv("DATABASE_URL", TEST_DATABASE_URL)
 
     # build_router (lo que usa _run) → router mockeado, sin API key.
-    monkeypatch.setattr(audit_worker, "build_router", lambda provider=None: _FakeRouter())
+    monkeypatch.setattr(
+        audit_worker, "build_router", lambda provider=None: _FakeRouter()
+    )
 
     async def _judge_fails_on_boom(messages, **kwargs):
         if any("BOOM" in (m.get("content") or "") for m in messages):
@@ -329,15 +344,19 @@ async def test_judge_failure_midway_persists_prior_convs_and_does_not_activate(
     audit_id = uuid.uuid4()
     try:
         async with factory() as s, s.begin():
+            # El worker exige key por-org (sin fallback a la key de plataforma):
+            # se seedea una key cifrada aunque el router LLM esté mockeado.
             await s.execute(
                 text(
-                    "INSERT INTO organizations(id, public_id, slug, name) "
-                    "VALUES (:id, :pid, :slug, 'Org')"
+                    "INSERT INTO organizations"
+                    "(id, public_id, slug, name, anthropic_api_key_encrypted) "
+                    "VALUES (:id, :pid, :slug, 'Org', :akey)"
                 ),
                 {
                     "id": org_id,
                     "pid": f"org_{org_id.hex[:16]}",
                     "slug": f"o-{org_id.hex[:6]}",
+                    "akey": encrypt_secret("sk-ant-test-org-key-000000000000"),
                 },
             )
             await s.execute(
@@ -424,7 +443,9 @@ async def test_judge_failure_midway_persists_prior_convs_and_does_not_activate(
 
             # El audit NO pasó a 'active' (quedó 'running' — el bloque final no corrió).
             status = (
-                await s.execute(text("SELECT status FROM audits WHERE id = :a"), {"a": audit_id})
+                await s.execute(
+                    text("SELECT status FROM audits WHERE id = :a"), {"a": audit_id}
+                )
             ).scalar_one()
             assert status == "running"
 
@@ -435,5 +456,7 @@ async def test_judge_failure_midway_persists_prior_convs_and_does_not_activate(
             # la eval de BOOM no queda y el audit no pasa a 'active'.
     finally:
         async with factory() as s, s.begin():
-            await s.execute(text("DELETE FROM organizations WHERE id = :id"), {"id": org_id})
+            await s.execute(
+                text("DELETE FROM organizations WHERE id = :id"), {"id": org_id}
+            )
         await eng.dispose()
