@@ -25,6 +25,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
+from app.services.validators.quotes import derivables as _quote_derivables
+
 # Marca de moneda: símbolo o palabra, antes o después del número.
 _SYM = r"\$|ars|pesos?"
 # Forma con separador de miles: 15.700 · 1,650 · 1.234.567
@@ -155,10 +157,14 @@ def check_prices(bot_text: str, precios: object, *, tolerance: int = 0) -> Price
     en_catalogo = [
         p for p in afirmados if any(abs(p - a) <= tolerance for a in allowed)
     ]
+    # Cotizaciones de servicio: la cuenta la hace quotes.py, no el modelo.
+    cotizables = _quote_derivables(bot_text, precios).derivables
 
     bad: list[int] = []
     for p in afirmados:
         if any(abs(p - a) <= tolerance for a in allowed):
+            continue
+        if any(abs(p - c) <= max(tolerance, 1) for c in cotizables):
             continue
         if _derivable(p, en_catalogo):
             continue
